@@ -41,9 +41,36 @@ const views = {
   }
 };
 
-function closeMobileMenu() {
+function closeMobileMenu(restoreFocus = false) {
+  const wasOpen = sidebar.classList.contains("is-open");
+
   sidebar.classList.remove("is-open");
   menuToggle.setAttribute("aria-expanded", "false");
+
+  if (restoreFocus && wasOpen) {
+    menuToggle.focus();
+  }
+}
+
+function focusFirstMobileNavigationLink() {
+  if (
+    !sidebar.classList.contains("is-open")
+    || window.innerWidth > 760
+  ) {
+    return;
+  }
+
+  const firstNavigationLink = sidebar.querySelector(".nav-link");
+
+  if (!firstNavigationLink) {
+    return;
+  }
+
+  if (getComputedStyle(firstNavigationLink).visibility === "hidden") {
+    return;
+  }
+
+  firstNavigationLink.focus();
 }
 
 function navigateTo(viewName) {
@@ -57,6 +84,8 @@ function navigateTo(viewName) {
     console.error("CareerPilot could not find the application status element.");
     return;
   }
+
+  const menuWasOpen = sidebar.classList.contains("is-open");
 
   navigationLinks.forEach((link) => {
     const isActive = link.dataset.view === viewName;
@@ -81,6 +110,10 @@ function navigateTo(viewName) {
   appStatus.textContent = view.status;
 
   closeMobileMenu();
+
+  if (menuWasOpen) {
+    document.querySelector("#main-content").focus();
+  }
 }
 
 navigationLinks.forEach((link) => {
@@ -110,14 +143,30 @@ window.addEventListener("hashchange", () => {
 });
 
 menuToggle.addEventListener("click", () => {
-  const isOpen = sidebar.classList.toggle("is-open");
+  const isOpen = sidebar.classList.contains("is-open");
 
-  menuToggle.setAttribute("aria-expanded", String(isOpen));
+  if (isOpen) {
+    closeMobileMenu(true);
+    return;
+  }
+
+  sidebar.classList.add("is-open");
+  menuToggle.setAttribute("aria-expanded", "true");
+  window.requestAnimationFrame(focusFirstMobileNavigationLink);
+});
+
+sidebar.addEventListener("transitionend", (event) => {
+  if (
+    (event.target === sidebar && event.propertyName === "transform")
+    || (sidebar.contains(event.target) && event.propertyName === "visibility")
+  ) {
+    focusFirstMobileNavigationLink();
+  }
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    closeMobileMenu();
+  if (event.key === "Escape" && sidebar.classList.contains("is-open")) {
+    closeMobileMenu(true);
   }
 });
 

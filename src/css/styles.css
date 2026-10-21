@@ -533,6 +533,10 @@ a:focus-visible {
 
 @media (max-width: 760px) {
   /* On smaller screens, the menu button opens this off-canvas sidebar. */
+  .topbar {
+    z-index: 21;
+  }
+
   .sidebar {
     width: min(290px, 86vw);
     transform: translateX(-105%);
