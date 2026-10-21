@@ -106,13 +106,19 @@ For M6, compare generated output against known evidence and documented expected 
 
 ### CP-011 — Profile and employment CRUD
 
-- Create a profile.
-- Edit a profile.
-- Create multiple employment records.
-- Edit one record and confirm others remain unchanged.
-- Delete a record and confirm the result.
-- Test invalid input.
-- Test empty-state behavior.
+- Automated state-layer tests (`tests/career-state.test.js`):
+  - Confirm a newly created state has no profile and no employment records.
+  - Create a profile and reject a second profile.
+  - Update a profile while preserving its ID and `createdAt`.
+  - Add multiple employment records; update one without changing others.
+  - Delete one record without affecting the other records.
+  - Reject invalid profile and employment data without changing state.
+  - Reject updates and deletes for unknown IDs.
+  - Confirm returned records and arrays cannot mutate internal state.
+  - Confirm caller-supplied IDs and timestamps are used without clock access or
+    random ID generation.
+- UI workflows, accessibility, and responsive checks will be added when the
+  Career Profile and Employment History interface is implemented.
 
 ### CP-012 — Achievement and evidence
 

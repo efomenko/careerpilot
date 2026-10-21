@@ -32,7 +32,9 @@ careerpilot/
 │   ├── css/
 │   │   └── styles.css
 │   └── js/
-│       └── app.js
+│       ├── app.js
+│       ├── career-model.js
+│       └── career-state.js
 ├── index.html
 ├── README.md
 └── .gitignore
@@ -78,6 +80,12 @@ Responsibilities:
 - Update records.
 - Control navigation.
 - Connect UI events to data and business rules.
+
+`src/js/career-state.js` provides an in-memory state factory for one Career
+Profile and Employment History records. It uses the CP-010 constructors for
+creation and validators for complete records, accepts IDs and timestamps from
+its caller, and returns copies so callers cannot mutate its internal state.
+It is independent of the DOM and browser storage; persistence is not provided.
 
 ### 5.3 Domain logic
 
