@@ -1,103 +1,212 @@
-# CareerPilot — Architecture Decision Log
+# CareerPilot — Architecture and Product Decision Log
 
-This document records important product and technical decisions.
+## 1. Purpose
 
-## ADR-001: Start with vanilla JavaScript
+This log records important CareerPilot product and technical decisions, their rationale, and their status.
 
-**Status:** Accepted
+It distinguishes confirmed project direction from proposed choices that still need approval.
 
-**Decision:** Use HTML, CSS, and vanilla JavaScript for the initial MVP.
+## 2. Decision Status Definitions
 
-**Reason:** The project should build programming fundamentals and
-keep the initial architecture easy to understand.
+- **Confirmed:** explicitly agreed as part of the project direction.
+- **Proposed:** recommended, but not yet approved.
+- **Open:** requires a decision.
+- **Superseded:** replaced by a later decision, with a reference to the replacement where available.
 
-**Consequences:** UI components, data handling, and navigation must
-be implemented without a frontend framework. Reconsider a framework
-if the application becomes difficult to maintain.
+Do not mark a decision confirmed merely because it appears in this document.
 
-## ADR-002: Use local-first persistence
+## 3. Decision Records
 
-**Status:** Accepted
+### DEC-001 — Start with a manual MVP
 
-**Decision:** Use browser localStorage for the initial single-user MVP.
+**Status:** Confirmed
 
-**Reason:** It allows the core workflow to be validated without a
-backend, database, or account system.
+**Decision:** Build the core CareerPilot workflow without requiring an AI API. Introduce AI only after the relevant manual workflows and data structures exist.
 
-**Consequences:** Data stays in the current browser profile.
-Backup and restore are required. localStorage is not encrypted
-storage and must not be treated as a secure vault.
+**Rationale:** This keeps the initial application easier to understand, test, and demonstrate. It also establishes the evidence model before introducing probabilistic generation.
 
-## ADR-003: Separate career facts from generated drafts
+**Consequences:**
 
-**Status:** Accepted
+- Initial features must work without AI credentials.
+- Rule-based templates and scoring are used where appropriate.
+- AI integration remains a later milestone.
 
-**Decision:** Store source career records separately from
-application-specific generated drafts.
+### DEC-002 — Use vanilla HTML, CSS, and JavaScript initially
 
-**Reason:** Editing a CV bullet or cover letter must not modify
-the underlying employment history or achievement records.
+**Status:** Confirmed
 
-**Consequences:** Drafts reference source records by stable IDs.
+**Decision:** Start with a lightweight browser application using vanilla web technologies.
 
-## ADR-004: Make job-fit assessment explainable
+**Rationale:** This supports the project's learning objectives and avoids unnecessary framework complexity during the initial build.
 
-**Status:** Accepted
+**Consequences:**
 
-**Decision:** Start with deterministic, documented scoring rules.
+- Keep the architecture modular and testable.
+- Avoid dependencies unless they offer clear value.
+- Revisit the decision only if demonstrated requirements justify a change.
 
-**Reason:** Users must understand which requirements are supported
-by evidence and where gaps remain.
+### DEC-003 — Keep career claims grounded in evidence
 
-**Consequences:** A score represents evidence coverage, not the
-probability of receiving a job offer.
+**Status:** Confirmed
 
-## ADR-005: Defer AI integration
+**Decision:** CareerPilot must not invent achievements, responsibilities, employment facts, or metrics.
 
-**Status:** Accepted
+**Rationale:** Accurate professional representation is a core product requirement.
 
-**Decision:** Validate the manual workflow before integrating
-an AI model API.
+**Consequences:**
 
-**Reason:** This isolates product and data-model problems from
-AI-specific errors and costs.
+- Career records require explicit verification information.
+- Drafts must be editable and reviewable.
+- Missing evidence must be surfaced rather than silently filled in.
+- AI output must be validated and approved by the user.
 
-**Consequences:** The first version uses manually entered
-requirements and deterministic draft templates.
+### DEC-004 — Maintain a staged delivery roadmap
 
-## ADR-006: Route future AI API calls through a backend
+**Status:** Confirmed
 
-**Status:** Accepted
+**Decision:** Organize implementation around the six established milestones, M1 through M6, and the existing CP task IDs.
 
-**Decision:** Never expose AI provider secret keys in frontend code.
+**Rationale:** Incremental delivery supports learning, review, and regression testing.
 
-**Reason:** Browser code and network requests can be inspected
-by users. Secret keys must remain server-side.
+**Consequences:**
 
-**Consequences:** AI integration will require a backend API.
+- Preserve the existing GitHub task IDs.
+- Update the roadmap when scope or dependencies change.
+- Do not report planned functionality as complete without verification.
 
-## ADR-007: Support JSON backup and restore
+### DEC-005 — Use a responsive application shell
 
-**Status:** Accepted
+**Status:** Confirmed
 
-**Decision:** Include versioned JSON export and validated import
-in the MVP.
+**Decision:** Provide a shared application shell with distinct sections for Dashboard, Career Profile, Achievements, Job Opportunities, Application Drafts, and Application Tracker.
 
-**Reason:** Browser-local data can be lost when browser storage
-is cleared or the user changes devices.
+**Rationale:** The application needs consistent navigation while keeping each workflow distinct.
 
-**Consequences:** Imported data must be validated before it
-replaces existing data.
+**Consequences:**
 
-## ADR-008: Approval does not verify source facts
+- Each navigation item must display its own section content.
+- Mobile navigation and keyboard behavior must be considered.
+- The shell should be built before detailed feature screens.
 
-**Status:** Accepted
+### DEC-006 — Choose the initial persistence mechanism
 
-**Decision:** Draft approval applies to a specific draft version.
-It does not change the verification status of source records.
+**Status:** Open
 
-**Reason:** Approving wording is not the same as independently
-verifying a career claim.
+**Problem:** Career data must persist between sessions, but the storage mechanism has not been finalized in this decision log.
 
-**Consequences:** Editing an approved draft returns it to review.
-Source evidence must be verified separately.
+**Candidate:** Browser storage for the initial single-user MVP.
+
+**Questions:**
+
+- Which browser storage mechanism best fits the expected data size and complexity?
+- How will malformed or outdated data be handled?
+- What happens when users clear browser data?
+- What backup and recovery instructions are required?
+
+**Next step:** Decide during CP-014 after considering export/import requirements.
+
+### DEC-007 — Define the final domain schemas
+
+**Status:** Proposed
+
+**Proposal:** Use separate records for profile, employment, achievements, jobs, requirements, drafts, and applications, with stable identifiers and explicit relationships.
+
+**Rationale:** Separate records support reuse and make evidence tracing easier.
+
+**Next step:** Review the conceptual schemas in `TECHNICAL_DESIGN.md` before implementing CP-010 and related tasks.
+
+### DEC-008 — Use transparent deterministic job-fit scoring
+
+**Status:** Confirmed in principle; formula open
+
+**Decision:** The initial job-fit assessment must use documented, reproducible rules rather than an opaque AI-generated judgment.
+
+**Open questions:**
+
+- Which weights apply to mandatory and preferred requirements?
+- How should partial evidence be represented?
+- How should unverified evidence affect scoring?
+- Should missing mandatory requirements impose a cap or separate warning?
+
+**Next step:** Define and test the formula during CP-023 and CP-024.
+
+### DEC-009 — Separate verification from approval
+
+**Status:** Confirmed
+
+**Decision:** Verification of a career claim and approval of a draft are separate states.
+
+**Rationale:** A user can approve text for editing or use without having independently verified every underlying claim. The interface must not confuse these actions.
+
+**Consequences:**
+
+- Career records and drafts require appropriate status fields.
+- Material edits after approval should trigger review.
+- Generated output cannot verify itself.
+
+### DEC-010 — Validate imported data before applying it
+
+**Status:** Confirmed in principle; import behavior open
+
+**Decision:** Imported JSON must be validated before it changes stored data.
+
+**Open questions:**
+
+- Should import replace existing data or merge records?
+- How should duplicate identifiers be handled?
+- How should unsupported schema versions be treated?
+
+**Next step:** Decide and document the behavior before completing CP-044.
+
+### DEC-011 — Choose an AI provider and architecture
+
+**Status:** Open
+
+**Problem:** AI features are planned, but provider selection and deployment architecture have not been finalized.
+
+**Considerations:**
+
+- Quality and structured-output support.
+- Cost and usage limits.
+- Data handling and retention.
+- API key protection.
+- Latency, failure behavior, and retry limits.
+- Ability to evaluate outputs consistently.
+
+**Next step:** Revisit during CP-060. Do not place provider secrets in frontend code.
+
+### DEC-012 — Define draft history and versioning
+
+**Status:** Open
+
+**Problem:** Users need to edit and approve drafts, but the desired history and rollback behavior needs clarification.
+
+**Questions:**
+
+- Is only the latest draft required initially?
+- Should approval be associated with an immutable draft version?
+- Should users be able to restore an earlier version?
+
+**Next step:** Resolve during CP-032 and CP-033.
+
+## 4. Decision Change Process
+
+For each significant decision:
+
+1. State the problem.
+2. Describe viable options.
+3. Explain the chosen option and rationale.
+4. Record consequences and limitations.
+5. Update the relevant design or requirements document.
+6. Mark the old decision superseded when applicable.
+
+## 5. Maintenance
+
+Review this file when:
+
+- The architecture changes.
+- A requirement changes materially.
+- A new dependency is introduced.
+- Data storage or privacy behavior changes.
+- AI integration decisions are made.
+- A decision is superseded by implementation evidence.

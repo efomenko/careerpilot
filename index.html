@@ -1,47 +1,271 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
   <meta
     name="description"
-    content="CareerPilot helps job seekers organize career evidence and manage job applications."
+    content="CareerPilot helps you organize your career evidence and job applications."
   >
-
-  <title>CareerPilot — AI Job Search Copilot</title>
-
+  <title>CareerPilot — Job Search Copilot</title>
   <link rel="stylesheet" href="./src/css/styles.css">
   <script type="module" src="./src/js/app.js"></script>
 </head>
 <body>
-  <header class="site-header">
-    <a class="brand" href="./index.html" aria-label="CareerPilot home">
-      CareerPilot
-    </a>
-    <span class="product-label">Job Search Copilot</span>
-  </header>
+  <!-- The sidebar and main column make up the shared application shell. -->
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a
+        class="brand"
+        href="#dashboard"
+        data-view="dashboard"
+        aria-label="CareerPilot dashboard"
+      >
+        <span class="brand-mark" aria-hidden="true">C</span>
+        <span>CareerPilot</span>
+      </a>
 
-  <main class="main-content">
-    <section class="welcome-card" aria-labelledby="welcome-title">
-      <p class="eyebrow">Your career, organized</p>
+      <p class="nav-heading">WORKSPACE</p>
 
-      <h1 id="welcome-title">Welcome to CareerPilot</h1>
+      <nav class="main-nav" aria-label="Main navigation">
+        <a class="nav-link active" href="#dashboard" data-view="dashboard"
+          aria-current="page">
+          <span class="nav-icon" aria-hidden="true">⌂</span>
+          <span>Dashboard</span>
+        </a>
+        <a class="nav-link" href="#profile" data-view="profile">
+          <span class="nav-icon" aria-hidden="true">◎</span>
+          <span>Career Profile</span>
+        </a>
+        <a class="nav-link" href="#achievements" data-view="achievements">
+          <span class="nav-icon" aria-hidden="true">✦</span>
+          <span>Achievements</span>
+        </a>
+        <a class="nav-link" href="#jobs" data-view="jobs">
+          <span class="nav-icon" aria-hidden="true">▤</span>
+          <span>Job Opportunities</span>
+        </a>
+        <a class="nav-link" href="#drafts" data-view="drafts">
+          <span class="nav-icon" aria-hidden="true">✎</span>
+          <span>Application Drafts</span>
+        </a>
+        <a class="nav-link" href="#applications" data-view="applications">
+          <span class="nav-icon" aria-hidden="true">✓</span>
+          <span>Application Tracker</span>
+        </a>
+      </nav>
 
-      <p class="welcome-description">
-        Build your career knowledge base, connect your experience
-        to job opportunities, and prepare applications grounded in
-        your real achievements.
-      </p>
+      <div class="sidebar-bottom">
+        <p class="sidebar-note">Your career story, organized.</p>
+        <span class="version-label">EARLY ACCESS · MVP</span>
+      </div>
+    </aside>
 
-      <p id="app-status" role="status">
-        Initializing CareerPilot...
-      </p>
-    </section>
-  </main>
+    <div class="main-column">
+      <header class="topbar">
+        <button
+          class="menu-toggle"
+          id="menu-toggle"
+          type="button"
+          aria-label="Toggle navigation"
+          aria-expanded="false"
+          aria-controls="sidebar"
+        >☰</button>
 
-  <footer class="site-footer">
-    <p>CareerPilot — Your experience. Your evidence. Your next move.</p>
-  </footer>
+        <div class="breadcrumb">
+          <span>Workspace</span>
+          <span aria-hidden="true">/</span>
+          <span id="current-section">Dashboard</span>
+        </div>
+
+        <button class="profile-button" type="button" aria-label="User profile">
+          <span class="avatar" aria-hidden="true">U</span>
+          <span class="profile-label">My Workspace</span>
+        </button>
+      </header>
+
+      <main id="main-content" class="main-content" tabindex="-1">
+        <section
+          class="dashboard-view"
+          data-page-view="dashboard"
+          aria-labelledby="page-title"
+        >
+          <section class="welcome-section">
+            <div>
+              <p class="eyebrow">YOUR CAREER WORKSPACE</p>
+              <h1 id="page-title">Good to have you here.</h1>
+              <p class="welcome-copy">
+                Build your career knowledge base, connect your experience to
+                opportunities, and prepare stronger applications.
+              </p>
+            </div>
+            <div class="welcome-symbol" aria-hidden="true">✦</div>
+          </section>
+
+          <section class="section-heading">
+            <div>
+              <h2>Your workspace at a glance</h2>
+              <p>These sections will come to life as we build the MVP.</p>
+            </div>
+          </section>
+
+          <section class="summary-grid" aria-label="Workspace overview">
+            <article class="summary-card">
+              <div class="card-top">
+                <span class="card-icon purple" aria-hidden="true">◎</span>
+                <span class="card-label">CAREER PROFILE</span>
+              </div>
+              <p class="card-value">Not started</p>
+              <p class="card-description">Capture your experience and skills.</p>
+              <a href="#profile" data-view="profile" class="card-link">
+                Build your profile <span aria-hidden="true">→</span>
+              </a>
+            </article>
+
+            <article class="summary-card">
+              <div class="card-top">
+                <span class="card-icon blue" aria-hidden="true">✦</span>
+                <span class="card-label">ACHIEVEMENTS</span>
+              </div>
+              <p class="card-value">0 recorded</p>
+              <p class="card-description">Keep track of evidence-backed results.</p>
+              <a href="#achievements" data-view="achievements" class="card-link">
+                Add achievements <span aria-hidden="true">→</span>
+              </a>
+            </article>
+
+            <article class="summary-card">
+              <div class="card-top">
+                <span class="card-icon orange" aria-hidden="true">▤</span>
+                <span class="card-label">JOB OPPORTUNITIES</span>
+              </div>
+              <p class="card-value">0 saved</p>
+              <p class="card-description">Organize roles you want to explore.</p>
+              <a href="#jobs" data-view="jobs" class="card-link">
+                Explore jobs <span aria-hidden="true">→</span>
+              </a>
+            </article>
+
+            <article class="summary-card">
+              <div class="card-top">
+                <span class="card-icon green" aria-hidden="true">✓</span>
+                <span class="card-label">APPLICATIONS</span>
+              </div>
+              <p class="card-value">0 tracked</p>
+              <p class="card-description">Keep your application process organized.</p>
+              <a href="#applications" data-view="applications" class="card-link">
+                View tracker <span aria-hidden="true">→</span>
+              </a>
+            </article>
+          </section>
+
+          <section class="next-step-card">
+            <div class="next-step-icon" aria-hidden="true">✧</div>
+            <div>
+              <p class="eyebrow">YOUR NEXT STEP</p>
+              <h2>Start with your career story</h2>
+              <p>
+                Before tailoring applications, build a reliable record of your
+                experience, achievements, and supporting evidence.
+              </p>
+            </div>
+            <a href="#profile" data-view="profile" class="primary-link">
+              Set up profile <span aria-hidden="true">→</span>
+            </a>
+          </section>
+        </section>
+
+        <section
+          class="placeholder-view"
+          data-page-view="profile"
+          aria-labelledby="profile-title"
+          hidden
+        >
+          <div class="placeholder-card">
+            <p class="eyebrow">YOUR CAREER STORY</p>
+            <h1 id="profile-title">Career Profile</h1>
+            <p class="placeholder-description">
+              A future home for your profile, skills, and employment history.
+            </p>
+            <p class="coming-soon">Coming soon</p>
+          </div>
+        </section>
+
+        <section
+          class="placeholder-view"
+          data-page-view="achievements"
+          aria-labelledby="achievements-title"
+          hidden
+        >
+          <div class="placeholder-card">
+            <p class="eyebrow">YOUR CAREER EVIDENCE</p>
+            <h1 id="achievements-title">Achievements</h1>
+            <p class="placeholder-description">
+              A future place to record achievements and the evidence that supports them.
+            </p>
+            <p class="coming-soon">Coming soon</p>
+          </div>
+        </section>
+
+        <section
+          class="placeholder-view"
+          data-page-view="jobs"
+          aria-labelledby="jobs-title"
+          hidden
+        >
+          <div class="placeholder-card">
+            <p class="eyebrow">YOUR NEXT OPPORTUNITY</p>
+            <h1 id="jobs-title">Job Opportunities</h1>
+            <p class="placeholder-description">
+              A future space for saved jobs and the requirements you want to explore.
+            </p>
+            <p class="coming-soon">Coming soon</p>
+          </div>
+        </section>
+
+        <section
+          class="placeholder-view"
+          data-page-view="drafts"
+          aria-labelledby="drafts-title"
+          hidden
+        >
+          <div class="placeholder-card">
+            <p class="eyebrow">YOUR APPLICATION MATERIALS</p>
+            <h1 id="drafts-title">Application Drafts</h1>
+            <p class="placeholder-description">
+              A future workspace for evidence-based CV bullets and cover letters.
+            </p>
+            <p class="coming-soon">Coming soon</p>
+          </div>
+        </section>
+
+        <section
+          class="placeholder-view"
+          data-page-view="applications"
+          aria-labelledby="applications-title"
+          hidden
+        >
+          <div class="placeholder-card">
+            <p class="eyebrow">YOUR JOB SEARCH</p>
+            <h1 id="applications-title">Application Tracker</h1>
+            <p class="placeholder-description">
+              A future way to follow application stages and remember follow-ups.
+            </p>
+            <p class="coming-soon">Coming soon</p>
+          </div>
+        </section>
+
+        <p class="app-status" id="app-status" role="status" aria-live="polite">
+          CareerPilot is loading…
+        </p>
+      </main>
+
+      <footer class="app-footer">
+        <span>CareerPilot</span>
+        <span>Build your next career move with confidence.</span>
+      </footer>
+    </div>
+  </div>
 </body>
 </html>
