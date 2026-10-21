@@ -91,6 +91,8 @@ The intended structure is:
 
 ```text
 careerpilot/
+├── tests/
+│   └── career-model.test.js
 ├── docs/
 │   ├── PRODUCT_VISION.md
 │   ├── PRD.md
@@ -105,10 +107,12 @@ careerpilot/
 │   │   └── styles.css
 │   └── js/
 │       ├── app.js
+│       ├── career-model.js
 │       ├── feedback.js
 │       ├── validation-demo.js
 │       └── validation.js
 ├── index.html
+├── package.json
 ├── validation-demo.html
 ├── README.md
 └── .gitignore
@@ -144,7 +148,15 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the task-level plan and dependencie
 
 ## Testing
 
-Testing instructions will be expanded as the test tooling and automated tests are implemented.
+The CP-010 model tests use Node.js's built-in test runner. Node.js 18 or later
+is required to run them; the browser application itself remains a static
+HTML/CSS/JavaScript application.
+
+From the project root, run:
+
+```bash
+npm test
+```
 
 The test plan covers:
 

@@ -92,11 +92,17 @@ For M6, compare generated output against known evidence and documented expected 
 
 ### CP-010 — Data structures
 
-- Validate a valid profile record.
-- Reject missing required properties.
-- Reject unexpected data types.
-- Test optional and empty values.
-- Validate employment date consistency.
+- Run `npm test` from the project root (requires Node.js 18 or later).
+- Validate valid Career Profile and Employment History records.
+- Verify empty headline, summary, skills, and responsibilities are accepted.
+- Reject missing required fields, blank required strings, incorrect field types, and non-string array items.
+- Reject malformed inputs and unknown properties in the construction helpers.
+- Reject missing, blank, or malformed ID/timestamp metadata.
+- Verify creation preserves supplied IDs and initializes `createdAt` and `updatedAt` to the supplied timestamp.
+- Reject invalid UTC timestamps and calendar dates, including impossible dates such as `2025-02-30`.
+- Accept current roles (`isCurrent: true`, `endDate: null`), past roles with unknown end dates (`isCurrent: false`, `endDate: null`), and past roles with known end dates.
+- Reject current roles with a non-null end date and known end dates earlier than the start date.
+- Confirm validation leaves its input unchanged.
 
 ### CP-011 — Profile and employment CRUD
 

@@ -103,9 +103,12 @@ Responsibilities:
 
 The initial persistence technology is an open decision. Browser storage is a possible MVP solution, but its limitations must be explained to users.
 
-## 6. Proposed Data Model
+## 6. Career Data Model
 
-The following are conceptual structures, not final schemas. Required fields, identifiers, dates, and validation rules must be finalized during the relevant implementation tasks.
+The Career Profile and Employment History records below are the CP-010 contract.
+All listed properties are required. Empty values are allowed only where shown.
+The model helpers in `src/js/career-model.js` validate these records without
+accessing the DOM, storage, the clock, or random ID generation.
 
 ### Career profile
 
@@ -116,26 +119,67 @@ The following are conceptual structures, not final schemas. Required fields, ide
   headline: "",
   summary: "",
   skills: [],
-  updatedAt: ""
+  createdAt: "2025-04-20T14:30:00.000Z",
+  updatedAt: "2025-04-20T14:30:00.000Z"
 }
 ```
 
-### Employment record
+- `id` and `fullName` are non-empty strings.
+- `headline` and `summary` are strings; an empty string is allowed.
+- `skills` is an array of strings; an empty array is allowed.
+- `createdAt` and `updatedAt` are valid timestamps in the exact
+  `YYYY-MM-DDTHH:mm:ss.sssZ` format produced by `Date.prototype.toISOString()`.
+  Numeric timezone offsets, missing milliseconds, and other fractional-second
+  widths are not accepted.
+- `updatedAt` must not be earlier than `createdAt`.
+- Creation receives an ID and timestamp from its caller and initializes both
+  timestamps from that creation timestamp. Editing behavior belongs to CP-011.
+
+### Employment History record
 
 ```js
 {
   id: "employment-id",
   employer: "",
   roleTitle: "",
-  startDate: "",
+  startDate: "2020-01-01",
   endDate: null,
-  isCurrent: false,
-  description: "",
-  skills: []
+  isCurrent: true,
+  responsibilities: [],
+  createdAt: "2025-04-20T14:30:00.000Z",
+  updatedAt: "2025-04-20T14:30:00.000Z"
 }
 ```
 
-### Achievement record
+- `id`, `employer`, and `roleTitle` are non-empty strings.
+- `startDate` is a valid calendar date in `YYYY-MM-DD` form.
+- `endDate` is either a valid calendar date in `YYYY-MM-DD` form or `null`.
+- `isCurrent` is a boolean. Current roles require `endDate: null`; past roles
+  may also have `endDate: null` when their end date is unknown.
+- A known end date cannot be earlier than the start date.
+- `responsibilities` is an array of strings; an empty array is allowed.
+- `createdAt` and `updatedAt` are valid timestamps in the exact
+  `YYYY-MM-DDTHH:mm:ss.sssZ` format produced by `Date.prototype.toISOString()`.
+  Numeric timezone offsets, missing milliseconds, and other fractional-second
+  widths are not accepted.
+- `updatedAt` must not be earlier than `createdAt`.
+- Creation receives an ID and timestamp from its caller and initializes both
+  timestamps from that creation timestamp. Editing behavior belongs to CP-011.
+- Date values are calendar dates, not timestamps.
+
+The validators return `{ valid, errors }`; each error identifies a `field` and
+explains the problem in `message`. Constructors throw a `TypeError` with an
+`errors` array when input or metadata is invalid. Non-object inputs are reported
+at `input` or `record`; omitted required properties, incorrect types, blank
+required strings, and unknown properties are reported by field. Constructors
+require all user-provided fields and reject unknown fields rather than silently
+dropping them. Invalid calendar dates, invalid UTC timestamps, and inconsistent
+employment dates are rejected. Validation does not mutate its input.
+Verification and approval fields are intentionally outside these CP-010
+records; verification is addressed by CP-013, and approval remains a separate
+concept.
+
+### Achievement record (conceptual; not finalized by CP-010)
 
 ```js
 {
@@ -153,9 +197,11 @@ The following are conceptual structures, not final schemas. Required fields, ide
 }
 ```
 
-A metric, when present, should have an explicit value, unit, context, and source or evidence reference. Do not infer a metric merely because the outcome would be more persuasive with one.
+A metric, when present, should have an explicit value, unit, context, and source
+or evidence reference. Do not infer a metric merely because the outcome would be
+more persuasive with one.
 
-### Job record
+### Job record (conceptual; not finalized by CP-010)
 
 ```js
 {
@@ -169,7 +215,7 @@ A metric, when present, should have an explicit value, unit, context, and source
 }
 ```
 
-### Job requirement
+### Job requirement (conceptual; not finalized by CP-010)
 
 ```js
 {
@@ -182,7 +228,7 @@ A metric, when present, should have an explicit value, unit, context, and source
 }
 ```
 
-### Application draft
+### Application draft (conceptual; not finalized by CP-010)
 
 ```js
 {
@@ -198,7 +244,7 @@ A metric, when present, should have an explicit value, unit, context, and source
 }
 ```
 
-### Application record
+### Application record (conceptual; not finalized by CP-010)
 
 ```js
 {
@@ -212,7 +258,8 @@ A metric, when present, should have an explicit value, unit, context, and source
 }
 ```
 
-These examples illustrate relationships and possible fields. Do not implement them as final schemas without reviewing validation, migrations, and task acceptance criteria.
+The non-career examples remain conceptual. Do not implement them as final
+schemas without reviewing validation, migrations, and task acceptance criteria.
 
 ## 7. Identifiers and Relationships
 
@@ -339,8 +386,7 @@ See `TEST_PLAN.md` for test scenarios.
 ## 15. Technical Decisions Requiring Confirmation
 
 - Browser storage choice.
-- Final data schemas.
-- Test runner and module structure.
+- Schemas for records beyond the Career Profile and Employment History.
 - Import merge or replacement behavior.
 - Draft versioning strategy.
 - Fit scoring weights and treatment of unverified evidence.

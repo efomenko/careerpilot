@@ -113,7 +113,23 @@ Do not mark a decision confirmed merely because it appears in this document.
 
 **Rationale:** Separate records support reuse and make evidence tracing easier.
 
-**Next step:** Review the conceptual schemas in `TECHNICAL_DESIGN.md` before implementing CP-010 and related tasks.
+**Next step:** Continue reviewing schemas for records beyond the Career Profile and Employment History before their implementation tasks.
+
+### DEC-013 — Define Career Profile and Employment History schemas
+
+**Status:** Confirmed
+
+**Decision:** CP-010 defines canonical Career Profile and Employment History records in `TECHNICAL_DESIGN.md` and implements their deterministic construction and validation in `src/js/career-model.js`. Each record has a stable non-empty string ID and creation/update timestamps. Profile skills and employment responsibilities are arrays of strings. Employment dates are calendar dates; `isCurrent` distinguishes a current role from a past role whose end date is unknown.
+
+**Rationale:** Later career workflows need a consistent, independently testable contract that does not require UI or persistence behavior.
+
+**Consequences:**
+
+- Constructors receive the record ID and creation timestamp from the caller; both timestamps are initialized to the supplied creation timestamp.
+- Validation is pure and reports field-specific errors without mutating records.
+- Focused model tests use Node.js's built-in test runner through `npm test`; no third-party test framework is added.
+- Verification and approval fields are not part of these CP-010 schemas. Their behavior remains governed by later verification and approval work, including the existing distinction in DEC-009.
+- Schemas for achievements, jobs, requirements, drafts, and applications remain proposals until their respective decisions are made.
 
 ### DEC-008 — Use transparent deterministic job-fit scoring
 
