@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta
+    name="description"
+    content="A standalone demonstration of CareerPilot validation and feedback helpers."
+  >
+  <title>Validation Demo - CareerPilot</title>
+  <link rel="stylesheet" href="./src/css/styles.css">
+  <script type="module" src="./src/js/validation-demo.js"></script>
+</head>
+<body>
+  <main class="validation-demo">
+    <a class="validation-demo__back-link" href="./index.html">Back to CareerPilot</a>
+    <p class="validation-demo__eyebrow">CP-003 - DEMONSTRATION ONLY</p>
+    <h1>Validation and feedback demo</h1>
+    <p class="validation-demo__intro">
+      This standalone harness exercises shared helpers only. It does not create
+      or save a Career Profile, achievement, job, or application draft.
+    </p>
+
+    <form id="validation-demo-form" novalidate>
+      <div class="validation-demo__field">
+        <label for="required-demo-value">Required demo value</label>
+        <input
+          id="required-demo-value"
+          name="required-demo-value"
+          type="text"
+          aria-describedby="required-demo-help"
+        >
+        <p class="validation-demo__help" id="required-demo-help">
+          Enter any text to pass the required-value check.
+        </p>
+        <p
+          class="validation-demo__field-error"
+          id="required-demo-error"
+          hidden
+        ></p>
+      </div>
+
+      <div class="validation-demo__field">
+        <label for="format-demo-value">Optional format demo value</label>
+        <input
+          id="format-demo-value"
+          name="format-demo-value"
+          type="text"
+          autocomplete="off"
+          aria-describedby="format-demo-help"
+        >
+        <p class="validation-demo__help" id="format-demo-help">
+          If entered, use two uppercase letters, a hyphen, and three digits
+          (for example, AB-123).
+        </p>
+        <p
+          class="validation-demo__field-error"
+          id="format-demo-error"
+          hidden
+        ></p>
+      </div>
+
+      <div class="validation-demo__actions">
+        <button type="submit">Check demo values</button>
+        <button id="show-warning" type="button">Show warning example</button>
+      </div>
+    </form>
+
+    <p
+      class="demo-feedback"
+      id="demo-feedback"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      hidden
+    ></p>
+  </main>
+</body>
+</html>

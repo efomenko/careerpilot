@@ -58,10 +58,19 @@ The persistence mechanism, test tooling, and future AI provider must be confirme
 
 The initial application is intended to be a lightweight browser application.
 
-1. Clone the repository or download its contents.
-2. Open the project folder in Visual Studio Code.
-3. Open `index.html` in a browser, or use a local development server if your setup requires one.
+1. Clone the repository or download its contents, then open a terminal in the project root.
+2. Start a static server. For example, with Python 3 installed:
+
+   ```bash
+   py -m http.server 8000
+   ```
+
+   On systems without the `py` launcher, use `python -m http.server 8000`.
+3. Open `http://localhost:8000/index.html` for the application shell or
+   `http://localhost:8000/validation-demo.html` for the standalone CP-003
+   validation and feedback harness.
 4. Open the browser developer tools and check the Console for errors.
+5. Stop the server with `Ctrl+C` when finished.
 
 Example Git commands:
 
@@ -72,7 +81,9 @@ cd careerpilot
 
 Replace `<your-repository-url>` with the actual URL of your GitHub repository.
 
-If module loading or browser restrictions prevent the application from running directly from a file, use a local static server. Document the confirmed method once it has been tested.
+Both `index.html` and `validation-demo.html` load JavaScript ES modules. Serve
+the pages over HTTP rather than opening the HTML files directly from the
+filesystem.
 
 ## Project Structure
 
@@ -93,8 +104,12 @@ careerpilot/
 │   ├── css/
 │   │   └── styles.css
 │   └── js/
-│       └── app.js
+│       ├── app.js
+│       ├── feedback.js
+│       ├── validation-demo.js
+│       └── validation.js
 ├── index.html
+├── validation-demo.html
 ├── README.md
 └── .gitignore
 ```

@@ -64,11 +64,29 @@ For M6, compare generated output against known evidence and documented expected 
 
 ### CP-003 — Validation and feedback
 
-- Submit missing required data.
-- Submit malformed data.
-- Confirm feedback explains how to correct the problem.
-- Confirm success, warning, and error states are distinguishable.
-- Check that dynamic feedback is accessible where appropriate.
+**Standalone harness checks (available now):**
+
+- Open `validation-demo.html` through a local static server.
+- Submit with the required demo value blank; confirm an explanatory field error and form-level error feedback appear.
+- Enter a non-empty value that does not match the example format; confirm the format explanation appears.
+- Submit with a valid required value and either a blank optional format value or a matching value; confirm success feedback.
+- Use the warning button and confirm its message is understandable without color.
+- Confirm invalid fields receive `aria-invalid="true"` and reference their error text in `aria-describedby` while retaining their help-text association.
+- After a valid submission, confirm the error state and error association are cleared.
+- Check that feedback uses a polite live region, that focus moves to the first invalid field after a failed submission, and that no `role="alert"` is used indiscriminately.
+- Confirm the harness is only a demonstration and does not save or create product records.
+
+**Regression checks for CP-002:**
+
+- Open `index.html` and verify all six navigation views, active navigation state, hash navigation, and browser Back/Forward behavior.
+- Test mobile navigation by keyboard and pointer at about 375 CSS pixels; confirm there is no horizontal scrolling or console error.
+
+**Repeat when business forms are added:**
+
+- Confirm each real form uses the correct required fields and explicitly defined format rules.
+- Submit missing and malformed business data; confirm messages explain how to correct the actual fields and are associated with the correct controls.
+- Verify successful, warning, and error feedback in real workflows, including accessible announcements and sensible focus behavior.
+- Confirm invalid records cannot be saved and failed validation does not corrupt existing data.
 
 ## 5. M2 — Career Knowledge Base
 

@@ -498,6 +498,149 @@ a:focus-visible {
   font-size: 10px;
 }
 
+.validation-demo {
+  width: min(100% - 32px, 680px);
+  margin: 48px auto;
+  padding: 32px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 12px 36px rgb(37 36 58 / 6%);
+}
+
+.validation-demo__back-link {
+  color: var(--color-primary-dark);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.validation-demo__eyebrow {
+  margin: 28px 0 8px;
+  color: var(--color-primary-dark);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.validation-demo h1 {
+  margin: 0;
+  font-size: clamp(26px, 6vw, 36px);
+  line-height: 1.2;
+}
+
+.validation-demo__intro {
+  margin: 14px 0 28px;
+  color: var(--color-muted);
+  line-height: 1.6;
+}
+
+.validation-demo__field {
+  margin-top: 22px;
+}
+
+.validation-demo__field label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.validation-demo__field input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  color: var(--color-text);
+  background: #fff;
+  border: 1px solid #aaa8bd;
+  border-radius: 8px;
+  font: inherit;
+}
+
+.validation-demo__field input:focus-visible {
+  outline: 3px solid #9d91ff;
+  outline-offset: 3px;
+}
+
+.validation-demo__field input[aria-invalid="true"] {
+  border-color: #a12622;
+}
+
+.validation-demo__help,
+.validation-demo__field-error {
+  margin: 7px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.validation-demo__help {
+  color: #555469;
+}
+
+.validation-demo__field-error {
+  color: #861c19;
+  font-weight: 700;
+}
+
+.validation-demo__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 26px;
+}
+
+.validation-demo__actions button {
+  min-height: 44px;
+  padding: 10px 16px;
+  color: #fff;
+  background: var(--color-primary-dark);
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.validation-demo__actions button:hover {
+  background: #3f3298;
+}
+
+.validation-demo__actions button:focus-visible {
+  outline: 3px solid #9d91ff;
+  outline-offset: 3px;
+}
+
+.validation-demo .demo-feedback {
+  margin: 22px 0 0;
+  padding: 12px 14px;
+  border: 1px solid;
+  border-radius: 8px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.validation-demo .demo-feedback[hidden],
+.validation-demo__field-error[hidden] {
+  display: none;
+}
+
+.validation-demo .demo-feedback--success {
+  color: #14532d;
+  background: #f0fdf4;
+  border-color: #4d8b5f;
+}
+
+.validation-demo .demo-feedback--warning {
+  color: #713f12;
+  background: #fffbeb;
+  border-color: #9a6700;
+}
+
+.validation-demo .demo-feedback--error {
+  color: #861c19;
+  background: #fef2f2;
+  border-color: #a12622;
+}
+
 @media (min-width: 1400px) {
   .summary-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -607,6 +750,11 @@ a:focus-visible {
 
   .section-heading {
     margin-top: 28px;
+  }
+
+  .validation-demo {
+    margin: 16px auto;
+    padding: 22px 18px;
   }
 
   .summary-grid {
