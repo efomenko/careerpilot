@@ -122,12 +122,42 @@ For M6, compare generated output against known evidence and documented expected 
 
 ### CP-012 — Achievement and evidence
 
-- Create an achievement with evidence.
-- Create an achievement without a metric.
-- Confirm missing metrics remain absent.
-- Edit an outcome and verify the record is updated.
-- Confirm source references remain associated correctly.
-- Test missing and duplicate references where relevant.
+- Model tests:
+  - Require a non-empty achievement `id`.
+  - Require non-empty `title` and `contribution`.
+  - Accept optional `context`, `outcome`, and `potentialImpact`, including
+    empty values, and verify the approved array defaults.
+  - Validate `actions` as an array of strings without imposing unapproved
+    constraints on individual action strings.
+  - Support multiple metric records and finite numeric values, including
+    positive, zero, and negative values.
+  - Accept only `"measured"` or `"estimated"` metric bases.
+  - Confirm `outcome` and `potentialImpact` are independent, including when
+    both are populated.
+  - Validate strict ISO UTC timestamps and reject `updatedAt` earlier than
+    `createdAt`.
+  - Accept `employmentId: null` or a non-empty string ID, and reject values
+    with an invalid basic type or blank string, consistent with the model's
+    identifier conventions.
+  - Confirm `evidence` defaults to an array and accepts array handling without
+    asserting any evidence item schema.
+  - Do not invent missing metrics; the approved missing-metrics default is an
+    empty `metrics` array.
+- State tests:
+  - Create, read, update, and delete achievements.
+  - Create an achievement with no employment link and with a valid optional
+    employment link.
+  - Reject a non-null employment link to a nonexistent employment record
+    during state-layer creation or update.
+  - Delete linked employment and confirm achievements are preserved with
+    `employmentId: null`.
+  - Compare each affected achievement before and after employment deletion;
+    every field and value remains unchanged except `employmentId`, which is
+    set to `null`.
+  - Confirm achievement content and unrelated employment and achievement
+    records remain unchanged by updates or deletion.
+- Verification and approval workflows are CP-013, not CP-012. Evidence item
+  structure and item-level validation remain open and are not asserted here.
 
 ### CP-013 — Verification
 

@@ -18,7 +18,8 @@ The initial MVP uses deterministic JavaScript logic and user-provided data. AI f
 
 - Responsive single-page application interface.
 - Career profile and employment history management.
-- Achievement records with evidence and verification status.
+- Achievement records and their supporting evidence (CP-012).
+- Verification workflows for career claims (CP-013).
 - Job opportunity management.
 - Job requirement extraction through user entry initially.
 - Requirement-to-evidence mapping.
@@ -105,32 +106,42 @@ The user must be able to record professional achievements.
 
 A record should support:
 
-- Achievement title.
-- Context or problem.
-- User's contribution.
-- Actions taken.
-- Outcome.
-- Metric and unit, when supported.
-- Evidence references.
-- Verification status.
-- Notes and source information.
+- Required, non-empty title and contribution.
+- Optional context, outcome, and potential impact; each may be empty.
+- Actions as an array of strings, defaulting to an empty array.
+- Multiple optional metrics, each with a name, finite numeric value, unit,
+  optional period, and a basis of measured or estimated. Positive, zero, and
+  negative values are allowed.
+- Supporting evidence, represented by an array defaulting to an empty array.
+  Evidence means information that helps substantiate an achievement; its item
+  structure remains open. No evidence format, upload, or storage integration
+  is defined by CP-012.
+- An optional link to one employment record; deleting that employment record
+  preserves the achievement and removes the link.
 
 Acceptance criteria:
 
-- A missing metric remains missing; it is not generated.
-- The record can distinguish a proposed impact from an achieved result.
-- The user can review and update verification status.
-- Unsupported records can be flagged before application use.
+- Missing metrics default to an empty array and are not invented.
+- `outcome` describes an actual result; `potentialImpact` describes an
+  expected, estimated, or possible benefit. The fields are independent and
+  may both contain values.
+- A measured metric is not automatically verified.
+- Verification and approval are handled separately under FR-05, not as part of
+  CP-012 achievement records.
 
-### FR-05 — Verification and evidence
+### FR-05 — Verification and approval
 
-Career claims must have explicit verification information.
+Explicit verification information is a CP-013 requirement, not a prerequisite
+for creating a CP-012 achievement. Verification and user approval are distinct
+from supporting evidence and from each other.
 
 Acceptance criteria:
 
 - Claims can be marked unverified, needs confirmation, or verified.
 - The interface explains what the statuses mean.
-- Evidence references can be associated with claims.
+- Supporting evidence can be associated with claims. The evidence item
+  structure remains open; this requirement does not specify evidence formats,
+  uploads, or storage integrations.
 - A claim cannot be treated as verified solely because generated text sounds plausible.
 - User approval is recorded separately from evidence verification.
 

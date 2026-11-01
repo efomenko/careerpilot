@@ -129,7 +129,65 @@ Do not mark a decision confirmed merely because it appears in this document.
 - Validation is pure and reports field-specific errors without mutating records.
 - Focused model tests use Node.js's built-in test runner through `npm test`; no third-party test framework is added.
 - Verification and approval fields are not part of these CP-010 schemas. Their behavior remains governed by later verification and approval work, including the existing distinction in DEC-009.
-- Schemas for achievements, jobs, requirements, drafts, and applications remain proposals until their respective decisions are made.
+- Schemas for jobs, requirements, drafts, and applications remain proposals until their respective decisions are made. The achievement schema is confirmed by DEC-014.
+
+### DEC-014 — Define the CP-012 Achievement Record Contract
+
+**Status:** Confirmed
+
+**Decision:** An achievement is a separate structured career record with the
+fields `id`, `title`, `context`, `contribution`, `actions`, `outcome`,
+`potentialImpact`, `metrics`, `evidence`, `employmentId`, `createdAt`, and
+`updatedAt`.
+`id` is a non-empty string. `title` and `contribution` are required and
+non-empty. `context`, `outcome`, and `potentialImpact` are optional strings and
+may be empty. `actions`, `metrics`, and `evidence` are arrays that default to
+`[]`; actions contain strings.
+
+`outcome` describes an actual result. `potentialImpact` describes an expected,
+estimated, or possible benefit. These fields are independent and may both
+contain values.
+
+Multiple metrics are supported. Each metric has a name, a finite JavaScript
+number as its value, a unit, an optional period, and a basis of `"measured"` or
+`"estimated"`. Metric values may be positive, zero, or negative. A measured
+metric is not automatically verified.
+
+An achievement may be unlinked or linked to one employment record through
+`employmentId`; `null` means unlinked. Multiple achievements may link to one
+employment record. The model layer validates the basic `employmentId`
+field type/format, and the state layer checks that a non-null link refers to an
+existing employment record during creation and update. Deleting employment
+preserves its achievements and sets their `employmentId` to `null`. Recovery
+behavior for an already-stale employment link remains open.
+
+Timestamps follow CP-010's strict ISO UTC format. The application supplies IDs
+and timestamps; `updatedAt` must not precede `createdAt`.
+
+The architecture uses a dedicated `src/js/achievement-model.js`, achievement
+CRUD in the existing `src/js/career-state.js`, the existing Achievements view,
+and one shared `careerState` instance.
+
+Evidence means supporting information that helps substantiate an achievement.
+The evidence item structure remains open. This decision defines no evidence
+item properties, source formats, uploads, or storage integrations. Evidence is
+distinct from verification and approval; verification belongs to CP-013.
+CP-012 does not add persistence or AI workflows.
+
+**Rationale:** A stable, independently validated achievement record supports
+later evidence-based workflows while distinguishing actual results from
+potential impact and keeping achievement capture separate from verification,
+approval, persistence, and AI workflows.
+
+**Consequences:**
+
+- Achievement construction and validation belong in the dedicated achievement
+  model module; achievement CRUD extends the existing state factory.
+- State-level employment relationship checks must preserve achievements when
+  linked employment is deleted.
+- Tests must not assume an evidence item schema or add unapproved validation
+  constraints.
+- Verification and approval remain outside CP-012.
 
 ### DEC-008 — Use transparent deterministic job-fit scoring
 

@@ -75,7 +75,8 @@ Acceptance criteria:
 
 - Achievements support context, contribution, actions, and outcome.
 - Metrics are optional and include units where applicable.
-- Evidence references can be added.
+- Supporting evidence can be associated with an achievement; evidence item
+  structure remains open.
 - Proposed and achieved outcomes are distinguishable.
 
 ### CP-013 — Verification status and warnings

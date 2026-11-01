@@ -28,11 +28,15 @@ careerpilot/
 │   ├── AI_GUARDRAILS.md
 │   ├── TEST_PLAN.md
 │   └── DECISIONS.md
+├── tests/
+│   ├── career-model.test.js
+│   └── achievement-model.test.js
 ├── src/
 │   ├── css/
 │   │   └── styles.css
 │   └── js/
 │       ├── app.js
+│       ├── achievement-model.js
 │       ├── career-model.js
 │       └── career-state.js
 ├── index.html
@@ -81,17 +85,22 @@ Responsibilities:
 - Control navigation.
 - Connect UI events to data and business rules.
 
-`src/js/career-state.js` provides an in-memory state factory for one Career
-Profile and Employment History records. It uses the CP-010 constructors for
-creation and validators for complete records, accepts IDs and timestamps from
-its caller, and returns copies so callers cannot mutate its internal state.
-It is independent of the DOM and browser storage; persistence is not provided.
+`src/js/career-state.js` provides the single in-memory state factory for one
+Career Profile, Employment History records, and Achievement records. It uses
+the corresponding model constructors and validators, accepts IDs and
+timestamps from its caller, and returns copies so callers cannot mutate its
+internal state. The existing Achievements view and shared `careerState`
+instance are used; a separate achievement state manager is not introduced.
+The state module is independent of the DOM and browser storage; persistence is
+not provided.
 
 ### 5.3 Domain logic
 
 Responsibilities:
 
-- Validate career and job records.
+- Construct and validate career, achievement, and job records.
+- Implement achievement construction and validation in
+  `src/js/achievement-model.js`.
 - Map requirements to evidence.
 - Calculate deterministic fit scores.
 - Build template-based drafts.
@@ -187,7 +196,7 @@ Verification and approval fields are intentionally outside these CP-010
 records; verification is addressed by CP-013, and approval remains a separate
 concept.
 
-### Achievement record (conceptual; not finalized by CP-010)
+### Achievement record (CP-012 contract)
 
 ```js
 {
@@ -197,17 +206,53 @@ concept.
   contribution: "",
   actions: [],
   outcome: "",
-  metric: null,
+  potentialImpact: "",
+  metrics: [
+    {
+      name: "",
+      value: 0,
+      unit: "",
+      basis: "measured"
+    }
+  ],
   evidence: [],
-  verificationStatus: "unverified",
-  createdAt: "",
-  updatedAt: ""
+  employmentId: null,
+  createdAt: "2025-04-20T14:30:00.000Z",
+  updatedAt: "2025-04-20T14:30:00.000Z"
 }
 ```
 
-A metric, when present, should have an explicit value, unit, context, and source
-or evidence reference. Do not infer a metric merely because the outcome would be
-more persuasive with one.
+- `id` is a non-empty string. `title` and `contribution` are required and
+  non-empty.
+- `context`, `outcome`, and `potentialImpact` are optional strings; empty
+  values are allowed. Whether omitted optional strings remain omitted or
+  default to empty strings is not specified.
+- `actions`, `metrics`, and `evidence` are arrays that default to `[]`.
+  `actions` contains strings. Whether individual action strings may be empty is
+  not specified.
+- `outcome` describes an actual result. `potentialImpact` describes an
+  expected, estimated, or possible benefit. They are independent and may both
+  contain values.
+- Multiple metrics are supported. Each metric has a name, a finite JavaScript
+  numeric value, a unit, an optional period, and a `basis` of `"measured"` or
+  `"estimated"`. Positive, zero, and negative values are allowed. Whether
+  names or units must be non-empty, and whether an empty period is allowed,
+  remain unspecified. A measured metric is not automatically verified.
+- Evidence means supporting information that helps substantiate an
+  achievement. `evidence` is an array defaulting to `[]`; its item structure
+  and item-level validation remain open. No source format, upload, or storage
+  integration is defined.
+- `employmentId` represents zero or one employment relationship; `null` means
+  unlinked. The model validates the basic field type/format. The state layer
+  checks that a non-null value refers to an existing employment record during
+  creation or update. Multiple achievements may link to the same employment
+  record. Recovery behavior for an already-stale link remains open.
+- `createdAt` and `updatedAt` use CP-010's strict
+  `YYYY-MM-DDTHH:mm:ss.sssZ` ISO UTC format. The application supplies IDs and
+  timestamps, and `updatedAt` must not precede `createdAt`.
+- Verification and approval are distinct from evidence and are outside the
+  CP-012 record contract; verification belongs to CP-013. CP-012 adds no
+  persistence or AI workflow.
 
 ### Job record (conceptual; not finalized by CP-010)
 
@@ -272,13 +317,19 @@ schemas without reviewing validation, migrations, and task acceptance criteria.
 ## 7. Identifiers and Relationships
 
 - Records should have stable identifiers.
+- An achievement may be linked to zero or one Employment History record using
+  `employmentId`; `null` represents no link. Multiple achievements may link to
+  one employment record.
+- Deleting an employment record preserves its achievements and sets their
+  `employmentId` to `null`. Recovery behavior for an already-stale link remains
+  open.
 - Requirements belong to a job.
-- Evidence should refer to the relevant career record or source.
 - Drafts should identify the job and evidence they use.
 - Applications should reference their job and relevant drafts.
 - Deleting a record must not silently leave misleading broken references.
 
-The behavior for deletion of linked records needs an explicit implementation decision.
+Evidence item structure and its relationship to sources or other records remain
+open; no evidence-reference format is defined by CP-012.
 
 ## 8. Navigation and UI State
 
@@ -308,7 +359,11 @@ Validation should be layered:
 
 1. **Input validation:** required fields, formats, ranges, and date consistency.
 2. **Record validation:** correct data types and required properties.
-3. **Relationship validation:** referenced jobs, achievements, and evidence must exist.
+3. **Relationship validation:** referenced jobs, achievements, and employment
+   records must exist where the contract requires a live relationship. The
+   state layer validates non-null achievement `employmentId` values during
+   creation and update. Evidence is an array defaulting to `[]`; item-level
+   validation is not defined while its item structure remains open.
 4. **Business-rule validation:** scoring, verification, and draft constraints.
 5. **Import validation:** JSON syntax, schema version, and record consistency.
 
@@ -394,7 +449,9 @@ See `TEST_PLAN.md` for test scenarios.
 ## 15. Technical Decisions Requiring Confirmation
 
 - Browser storage choice.
-- Schemas for records beyond the Career Profile and Employment History.
+- Schemas for future record types other than the Career Profile, Employment
+  History, and Achievement record remain unresolved. The Achievement schema is
+  finalized by DEC-014.
 - Import merge or replacement behavior.
 - Draft versioning strategy.
 - Fit scoring weights and treatment of unverified evidence.
