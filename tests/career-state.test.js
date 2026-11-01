@@ -169,6 +169,35 @@ test("rejects invalid employment data without changing existing state", () => {
   assert.deepEqual(state.getEmploymentRecords(), [existing]);
 });
 
+test("rejects impossible employment end dates on create and update", () => {
+  const state = createCareerState();
+  const existing = addEmployment(state, "employment-1");
+
+  assert.throws(
+    () => state.addEmploymentRecord(employmentInput({
+      isCurrent: false,
+      endDate: "2025-02-30"
+    }), {
+      id: "employment-2",
+      createdAt
+    }),
+    (error) => error instanceof TypeError
+      && error.errors.some(({ field }) => field === "endDate")
+  );
+  assert.deepEqual(state.getEmploymentRecords(), [existing]);
+
+  assert.throws(
+    () => state.updateEmploymentRecord(
+      existing.id,
+      employmentInput({ isCurrent: false, endDate: "2025-02-30" }),
+      updatedAt
+    ),
+    (error) => error instanceof TypeError
+      && error.errors.some(({ field }) => field === "endDate")
+  );
+  assert.deepEqual(state.getEmploymentRecords(), [existing]);
+});
+
 test("rejects invalid profile update timestamps without changing the profile", () => {
   const state = createCareerState();
   const existing = state.createProfile(

@@ -177,19 +177,182 @@
         </section>
 
         <section
-          class="placeholder-view"
+          class="profile-view"
           data-page-view="profile"
           aria-labelledby="profile-title"
           hidden
         >
-          <div class="placeholder-card">
+          <div class="profile-card">
             <p class="eyebrow">YOUR CAREER STORY</p>
             <h1 id="profile-title">Career Profile</h1>
-            <p class="placeholder-description">
-              A future home for your profile, skills, and employment history.
+            <p class="profile-description">
+              Capture the professional details you want to keep together.
             </p>
-            <p class="coming-soon">Coming soon</p>
+            <p class="profile-memory-note">
+              Your profile is held in memory for this session only and will be
+              lost when you reload this page.
+            </p>
+
+            <form class="profile-form" id="profile-form" novalidate>
+              <div class="profile-field">
+                <label for="profile-full-name">Full name <span aria-hidden="true">*</span></label>
+                <input
+                  id="profile-full-name"
+                  name="fullName"
+                  type="text"
+                  autocomplete="name"
+                  aria-describedby="profile-full-name-help profile-full-name-error"
+                  required
+                >
+                <p class="profile-field-help" id="profile-full-name-help">Your name as you want it shown in your profile.</p>
+                <p class="profile-field-error" id="profile-full-name-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="profile-headline">Headline</label>
+                <input
+                  id="profile-headline"
+                  name="headline"
+                  type="text"
+                  aria-describedby="profile-headline-error"
+                >
+                <p class="profile-field-error" id="profile-headline-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="profile-summary">Summary</label>
+                <textarea
+                  id="profile-summary"
+                  name="summary"
+                  rows="5"
+                  aria-describedby="profile-summary-error"
+                ></textarea>
+                <p class="profile-field-error" id="profile-summary-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="profile-skills">Skills</label>
+                <textarea
+                  id="profile-skills"
+                  name="skills"
+                  rows="5"
+                  aria-describedby="profile-skills-help profile-skills-error"
+                ></textarea>
+                <p class="profile-field-help" id="profile-skills-help">Enter one skill per line. Blank lines are ignored.</p>
+                <p class="profile-field-error" id="profile-skills-error" hidden></p>
+              </div>
+
+              <div class="profile-form-actions">
+                <button class="profile-submit" type="submit">Save profile</button>
+              </div>
+              <p class="profile-feedback" id="profile-feedback" hidden></p>
+            </form>
           </div>
+
+          <section class="employment-card" aria-labelledby="employment-title">
+            <div class="employment-heading">
+              <div>
+                <p class="eyebrow">YOUR EXPERIENCE</p>
+                <h2 id="employment-title" tabindex="-1">Employment History</h2>
+                <p class="employment-description">Add roles to keep your work history organized for this session.</p>
+              </div>
+            </div>
+
+            <div
+              class="employment-list"
+              id="employment-list"
+              role="list"
+              aria-label="Employment records"
+              aria-live="polite"
+            ></div>
+            <p class="employment-empty" id="employment-empty">No employment records yet. Add your first role below.</p>
+            <p class="employment-feedback" id="employment-feedback" hidden></p>
+
+            <form class="employment-form" id="employment-form" novalidate>
+              <h3 class="employment-form-title" id="employment-form-title">Add employment</h3>
+
+              <div class="employment-form-grid">
+                <div class="profile-field">
+                  <label for="employment-employer">Employer <span aria-hidden="true">*</span></label>
+                  <input
+                    id="employment-employer"
+                    name="employer"
+                    type="text"
+                    aria-describedby="employment-employer-error"
+                    required
+                  >
+                  <p class="profile-field-error" id="employment-employer-error" hidden></p>
+                </div>
+
+                <div class="profile-field">
+                  <label for="employment-role-title">Role title <span aria-hidden="true">*</span></label>
+                  <input
+                    id="employment-role-title"
+                    name="roleTitle"
+                    type="text"
+                    aria-describedby="employment-role-title-error"
+                    required
+                  >
+                  <p class="profile-field-error" id="employment-role-title-error" hidden></p>
+                </div>
+
+                <div class="profile-field">
+                  <label for="employment-start-date">Start date <span aria-hidden="true">*</span></label>
+                  <input
+                    id="employment-start-date"
+                    name="startDate"
+                    type="date"
+                    aria-describedby="employment-start-date-error"
+                    required
+                  >
+                  <p class="profile-field-error" id="employment-start-date-error" hidden></p>
+                </div>
+
+                <div class="profile-field">
+                  <label for="employment-end-date">End date</label>
+                  <input
+                    id="employment-end-date"
+                    name="endDate"
+                    type="text"
+                    placeholder="YYYY-MM-DD"
+                    aria-describedby="employment-end-date-help employment-end-date-error"
+                  >
+                  <p class="profile-field-help" id="employment-end-date-help">Enter a date as YYYY-MM-DD, or leave blank if the end date is unknown.</p>
+                  <p class="profile-field-error" id="employment-end-date-error" hidden></p>
+                </div>
+
+                <div class="profile-field employment-current-field">
+                  <input
+                    id="employment-is-current"
+                    name="isCurrent"
+                    type="checkbox"
+                    aria-controls="employment-end-date"
+                    aria-describedby="employment-is-current-help employment-is-current-error"
+                  >
+                  <label for="employment-is-current">This is my current role</label>
+                  <p class="profile-field-help" id="employment-is-current-help">When selected, the end date is disabled and saved with no end date.</p>
+                  <p class="profile-field-error" id="employment-is-current-error" hidden></p>
+                </div>
+
+                <div class="profile-field employment-responsibilities-field">
+                  <label for="employment-responsibilities">Responsibilities</label>
+                  <textarea
+                    id="employment-responsibilities"
+                    name="responsibilities"
+                    rows="4"
+                    aria-describedby="employment-responsibilities-help employment-responsibilities-error"
+                  ></textarea>
+                  <p class="profile-field-help" id="employment-responsibilities-help">Enter one responsibility per line. Blank lines are ignored.</p>
+                  <p class="profile-field-error" id="employment-responsibilities-error" hidden></p>
+                </div>
+              </div>
+
+              <div class="profile-form-actions">
+                <button class="profile-submit" id="employment-submit" type="submit">Add employment</button>
+                <button class="employment-cancel" id="employment-cancel" type="button" hidden>Cancel edit</button>
+              </div>
+            </form>
+          </section>
         </section>
 
         <section

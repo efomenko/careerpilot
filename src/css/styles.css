@@ -641,6 +641,373 @@ a:focus-visible {
   border-color: #a12622;
 }
 
+.profile-view {
+  width: min(100%, 820px);
+  margin: 0 auto;
+}
+
+.profile-card {
+  padding: clamp(22px, 4vw, 36px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 12px 32px rgb(37 36 58 / 5%);
+}
+
+.employment-card {
+  margin-top: 22px;
+  padding: clamp(22px, 4vw, 36px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 12px 32px rgb(37 36 58 / 5%);
+}
+
+.employment-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.employment-heading .eyebrow {
+  margin-bottom: 8px;
+  color: var(--color-primary-dark);
+}
+
+.employment-heading h2 {
+  margin: 0;
+  font-size: clamp(21px, 3vw, 28px);
+  line-height: 1.2;
+}
+
+.employment-description {
+  margin: 10px 0 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.employment-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.employment-empty {
+  margin: 22px 0 0;
+  padding: 18px;
+  color: var(--color-muted);
+  background: #faf9ff;
+  border: 1px dashed #c7c2de;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.employment-empty[hidden] {
+  display: none;
+}
+
+.employment-record {
+  min-width: 0;
+  padding: 18px;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+}
+
+.employment-record-title {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 17px;
+}
+
+.employment-record-employer,
+.employment-record-dates {
+  margin: 6px 0 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.employment-record-responsibilities {
+  margin: 14px 0 0;
+  padding-left: 20px;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.employment-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.employment-action,
+.employment-cancel {
+  min-height: 40px;
+  padding: 8px 13px;
+  color: var(--color-primary-dark);
+  background: #f5f3ff;
+  border: 1px solid #d7d1f4;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.employment-action--delete {
+  color: #861c19;
+  background: #fef2f2;
+  border-color: #e7b7b5;
+}
+
+.employment-action:hover,
+.employment-cancel:hover {
+  background: #ebe7ff;
+}
+
+.employment-action--delete:hover {
+  background: #fee2e2;
+}
+
+.employment-action:focus-visible,
+.employment-cancel:focus-visible {
+  outline: 3px solid #9d91ff;
+  outline-offset: 3px;
+}
+
+.employment-form {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px solid var(--color-border);
+}
+
+.employment-form-title {
+  margin: 0;
+  font-size: 17px;
+}
+
+.employment-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+  margin-top: 4px;
+}
+
+.employment-current-field {
+  display: flex;
+  align-items: center;
+  align-content: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.employment-current-field label {
+  margin: 0;
+  cursor: pointer;
+}
+
+.employment-current-field .profile-field-help,
+.employment-current-field .profile-field-error {
+  flex-basis: 100%;
+}
+
+.employment-responsibilities-field {
+  grid-column: 1 / -1;
+}
+
+.employment-feedback {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border: 1px solid;
+  border-radius: 8px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.employment-feedback[hidden] {
+  display: none;
+}
+
+.employment-feedback.demo-feedback--success {
+  color: #14532d;
+  background: #f0fdf4;
+  border-color: #4d8b5f;
+}
+
+.employment-feedback.demo-feedback--error {
+  color: #861c19;
+  background: #fef2f2;
+  border-color: #a12622;
+}
+
+.profile-card > .eyebrow {
+  color: var(--color-primary-dark);
+}
+
+.profile-card h1 {
+  margin: 0;
+  font-size: clamp(26px, 4vw, 36px);
+  line-height: 1.2;
+}
+
+.profile-description {
+  margin: 12px 0 0;
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.profile-memory-note {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  color: #5140a0;
+  background: #f4f1ff;
+  border: 1px solid #ddd6ff;
+  border-radius: 9px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.profile-form {
+  margin-top: 26px;
+}
+
+.profile-field {
+  margin-top: 20px;
+}
+
+.profile-field:first-child {
+  margin-top: 0;
+}
+
+.profile-field label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.profile-field input,
+.profile-field textarea {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  color: var(--color-text);
+  background: #fff;
+  border: 1px solid #aaa8bd;
+  border-radius: 8px;
+  font: inherit;
+}
+
+.profile-field textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+
+.employment-current-field input {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+  accent-color: var(--color-primary);
+}
+
+.profile-field input:focus-visible,
+.profile-field textarea:focus-visible,
+.profile-submit:focus-visible {
+  outline: 3px solid #9d91ff;
+  outline-offset: 3px;
+}
+
+.profile-field input[aria-invalid="true"],
+.profile-field textarea[aria-invalid="true"] {
+  border-color: #a12622;
+}
+
+.profile-field-help,
+.profile-field-error {
+  margin: 7px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.profile-field-help {
+  color: #555469;
+}
+
+.profile-field-error {
+  color: #861c19;
+  font-weight: 700;
+}
+
+.profile-field-error[hidden],
+.profile-feedback[hidden] {
+  display: none;
+}
+
+.profile-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 26px;
+}
+
+.profile-submit {
+  min-height: 44px;
+  padding: 10px 16px;
+  color: #fff;
+  background: var(--color-primary-dark);
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.profile-submit:hover {
+  background: #3f3298;
+}
+
+.profile-feedback {
+  margin: 22px 0 0;
+  padding: 12px 14px;
+  border: 1px solid;
+  border-radius: 8px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.profile-feedback.demo-feedback--success {
+  color: #14532d;
+  background: #f0fdf4;
+  border-color: #4d8b5f;
+}
+
+.profile-feedback.demo-feedback--error {
+  color: #861c19;
+  background: #fef2f2;
+  border-color: #a12622;
+}
+
+@media (max-width: 760px) {
+  .employment-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .employment-responsibilities-field {
+    grid-column: auto;
+  }
+}
+
 @media (min-width: 1400px) {
   .summary-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
