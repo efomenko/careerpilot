@@ -174,6 +174,268 @@ test("adds, retrieves, updates, and deletes achievement records", () => {
   assert.deepEqual(state.getAchievementRecords(), [second]);
 });
 
+test("achievement content saves preserve or reset verification based on normalized changes", () => {
+  const state = createCareerState();
+  const created = addAchievement(state, "achievement-1");
+  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
+
+  const unchanged = state.updateAchievementRecord(
+    created.id,
+    achievementInput({
+      context: "",
+      actions: [],
+      outcome: "",
+      potentialImpact: "",
+      metrics: [],
+      evidence: [],
+      employmentId: null
+    }),
+    "2025-05-02T09:15:00.000Z"
+  );
+  assert.equal(unchanged.verificationStatus, "verified");
+  assert.equal(unchanged.updatedAt, "2025-05-02T09:15:00.000Z");
+  assert.equal(unchanged.id, created.id);
+  assert.equal(unchanged.createdAt, createdAt);
+
+  const changed = state.updateAchievementRecord(
+    created.id,
+    achievementInput({ title: "Changed title" }),
+    "2025-05-03T09:15:00.000Z"
+  );
+  assert.equal(changed.verificationStatus, "unverified");
+  assert.equal(changed.updatedAt, "2025-05-03T09:15:00.000Z");
+
+  state.updateAchievementVerificationStatus(created.id, "needs_confirmation", updatedAt);
+  const needsConfirmation = state.updateAchievementRecord(
+    created.id,
+    achievementInput({ contribution: "Changed contribution" }),
+    updatedAt
+  );
+  assert.equal(needsConfirmation.verificationStatus, "needs_confirmation");
+
+  const alreadyUnverified = state.updateAchievementRecord(
+    created.id,
+    achievementInput({ contribution: "Changed again" }),
+    updatedAt
+  );
+  assert.equal(alreadyUnverified.verificationStatus, "needs_confirmation");
+
+  state.updateAchievementVerificationStatus(created.id, "unverified", updatedAt);
+  const stillUnverified = state.updateAchievementRecord(
+    created.id,
+    achievementInput({ contribution: "Changed while unverified" }),
+    updatedAt
+  );
+  assert.equal(stillUnverified.verificationStatus, "unverified");
+});
+
+test("achievement content comparison handles nested objects, arrays, sparse slots, and cycles", () => {
+  const state = createCareerState();
+  const evidence = [{ detail: "same", nested: { value: 1 } }, ["first", "second"]];
+  const metrics = [
+    { name: "Metric", value: 1, unit: "items", basis: "measured" },
+    { name: "Second metric", value: 2, unit: "items", basis: "estimated" }
+  ];
+  const created = addAchievement(state, "achievement-1", achievementInput({
+    metrics,
+    evidence
+  }));
+  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
+
+  const reorderedKeys = state.updateAchievementRecord(
+    created.id,
+    achievementInput({
+      metrics: [
+        { basis: "measured", unit: "items", value: 1, name: "Metric" },
+        { basis: "estimated", unit: "items", value: 2, name: "Second metric" }
+      ],
+      evidence: [{ nested: { value: 1 }, detail: "same" }, ["first", "second"]]
+    }),
+    updatedAt
+  );
+  assert.equal(reorderedKeys.verificationStatus, "verified");
+
+  const changedArrayOrder = state.updateAchievementRecord(
+    created.id,
+    achievementInput({
+      metrics,
+      evidence: [{ detail: "same", nested: { value: 1 } }, ["second", "first"]]
+    }),
+    updatedAt
+  );
+  assert.equal(changedArrayOrder.verificationStatus, "unverified");
+
+  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
+  const changedMetricOrder = state.updateAchievementRecord(
+    created.id,
+    achievementInput({
+      metrics: [...metrics].reverse(),
+      evidence: [{ detail: "same", nested: { value: 1 } }, ["second", "first"]]
+    }),
+    updatedAt
+  );
+  assert.equal(changedMetricOrder.verificationStatus, "unverified");
+
+  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
+  const sparseNestedArray = [];
+  sparseNestedArray.length = 1;
+  const sparse = state.updateAchievementRecord(
+    created.id,
+    achievementInput({
+      metrics: [...metrics].reverse(),
+      evidence: [{ detail: "same", nested: { value: 1 } }, sparseNestedArray]
+    }),
+    updatedAt
+  );
+  assert.equal(sparse.verificationStatus, "unverified");
+
+  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
+  const explicitUndefined = [undefined];
+  const explicitSlot = state.updateAchievementRecord(
+    created.id,
+    achievementInput({
+      metrics: [...metrics].reverse(),
+      evidence: [{ detail: "same", nested: { value: 1 } }, explicitUndefined]
+    }),
+    updatedAt
+  );
+  assert.equal(explicitSlot.verificationStatus, "unverified");
+
+  const cycleA = { label: "cycle" };
+  cycleA.self = cycleA;
+  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
+  const cyclic = state.updateAchievementRecord(
+    created.id,
+    achievementInput({
+      metrics: [...metrics].reverse(),
+      evidence: [{ detail: "same", nested: { value: 1 } }, sparseNestedArray, cycleA]
+    }),
+    updatedAt
+  );
+  assert.equal(cyclic.verificationStatus, "unverified");
+
+  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
+  const cycleB = { label: "cycle" };
+  cycleB.self = cycleB;
+  const equivalentCycle = state.updateAchievementRecord(
+    created.id,
+    achievementInput({
+      metrics: [...metrics].reverse(),
+      evidence: [{ detail: "same", nested: { value: 1 } }, sparseNestedArray, cycleB]
+    }),
+    updatedAt
+  );
+  assert.equal(equivalentCycle.verificationStatus, "verified");
+});
+
+test("achievement content comparison uses Object.is for primitive evidence values", () => {
+  const state = createCareerState();
+  const existing = addAchievement(state, "achievement-1", achievementInput({
+    evidence: [0]
+  }));
+  state.updateAchievementVerificationStatus(existing.id, "verified", updatedAt);
+
+  const updated = state.updateAchievementRecord(
+    existing.id,
+    achievementInput({ evidence: [-0] }),
+    updatedAt
+  );
+  assert.equal(updated.verificationStatus, "unverified");
+});
+
+test("ordinary achievement content input cannot set verification status", () => {
+  const state = createCareerState();
+  const existing = addAchievement(state, "achievement-1");
+
+  assert.throws(
+    () => state.updateAchievementRecord(
+      existing.id,
+      achievementInput({ verificationStatus: "verified" }),
+      updatedAt
+    ),
+    /cannot change verificationStatus/
+  );
+  assert.deepEqual(state.getAchievementRecords(), [existing]);
+});
+
+test("updates achievement verification status separately and preserves content", () => {
+  const state = createCareerState();
+  const existing = addAchievement(state, "achievement-1", achievementInput({
+    evidence: [{ nested: ["preserved"] }]
+  }));
+
+  for (const status of ["verified", "needs_confirmation", "unverified"]) {
+    const updated = state.updateAchievementVerificationStatus(
+      existing.id,
+      status,
+      updatedAt
+    );
+    assert.equal(updated.verificationStatus, status);
+    assert.equal(updated.id, existing.id);
+    assert.equal(updated.createdAt, existing.createdAt);
+    assert.equal(updated.updatedAt, updatedAt);
+    assert.deepEqual(
+      { ...updated, verificationStatus: existing.verificationStatus, updatedAt: existing.updatedAt },
+      existing
+    );
+    assert.deepEqual(state.getAchievementRecords(), [updated]);
+  }
+});
+
+test("invalid verification status updates leave state unchanged", () => {
+  const state = createCareerState();
+  const existing = addAchievement(state, "achievement-1");
+
+  for (const status of ["pending", "", null, 1, false]) {
+    assert.throws(
+      () => state.updateAchievementVerificationStatus(existing.id, status, updatedAt),
+      (error) => error instanceof TypeError
+        && error.errors.some(({ field }) => field === "verificationStatus")
+    );
+    assert.deepEqual(state.getAchievementRecords(), [existing]);
+  }
+
+  for (const invalidUpdatedAt of ["not-a-timestamp", "2025-04-20T14:29:59.999Z"]) {
+    assert.throws(
+      () => state.updateAchievementVerificationStatus(
+        existing.id,
+        "verified",
+        invalidUpdatedAt
+      ),
+      (error) => error instanceof TypeError
+        && error.errors.some(({ field }) => field === "updatedAt")
+    );
+    assert.deepEqual(state.getAchievementRecords(), [existing]);
+  }
+
+  assert.throws(
+    () => state.updateAchievementVerificationStatus("missing", "verified", updatedAt),
+    /does not exist/
+  );
+  assert.deepEqual(state.getAchievementRecords(), [existing]);
+});
+
+test("verification status update returns safe copies of nested record data", () => {
+  const state = createCareerState();
+  const existing = addAchievement(state, "achievement-1", achievementInput({
+    evidence: [{ nested: [{ value: "original" }] }]
+  }));
+
+  const updated = state.updateAchievementVerificationStatus(
+    existing.id,
+    "verified",
+    updatedAt
+  );
+  updated.evidence[0].nested[0].value = "mutated";
+  updated.verificationStatus = "unverified";
+
+  assert.deepEqual(state.getAchievementRecords(), [{
+    ...existing,
+    verificationStatus: "verified",
+    updatedAt
+  }]);
+});
+
 test("achievement updates apply constructor defaults and preserve identity timestamps", () => {
   const state = createCareerState();
   const employment = addEmployment(state, "employment-1");
@@ -311,6 +573,43 @@ test("employment deletion unlinks achievements without changing other content", 
   assert.equal(linked.employmentId, "employment-1");
 });
 
+test("employment deletion resets only linked verified achievements and preserves timestamps", () => {
+  const state = createCareerState();
+  addEmployment(state, "employment-1");
+  const statuses = ["verified", "needs_confirmation", "unverified"];
+  const before = statuses.map((status, index) => {
+    const record = addAchievement(state, `achievement-${index}`, achievementInput({
+      title: `Achievement ${index}`,
+      evidence: [{ nested: ["value", { index }] }],
+      employmentId: "employment-1"
+    }));
+    return state.updateAchievementVerificationStatus(record.id, status, updatedAt);
+  });
+  const unlinked = addAchievement(state, "achievement-independent");
+
+  state.deleteEmploymentRecord("employment-1");
+
+  const after = state.getAchievementRecords();
+  for (let index = 0; index < statuses.length; index += 1) {
+    assert.equal(after[index].employmentId, null);
+    assert.equal(
+      after[index].verificationStatus,
+      statuses[index] === "verified" ? "unverified" : statuses[index]
+    );
+    assert.equal(after[index].createdAt, before[index].createdAt);
+    assert.equal(after[index].updatedAt, before[index].updatedAt);
+    const { employmentId: _employmentId, verificationStatus: _status, ...content } = after[index];
+    const {
+      employmentId: _beforeEmploymentId,
+      verificationStatus: _beforeStatus,
+      ...beforeContent
+    } = before[index];
+    assert.deepEqual(content, beforeContent);
+  }
+  assert.deepEqual(after[statuses.length], unlinked);
+  assert.deepEqual(state.getEmploymentRecords(), []);
+});
+
 test("invalid achievement input and timestamps leave state unchanged", () => {
   const state = createCareerState();
   const existing = addAchievement(state, "achievement-1");
@@ -401,6 +700,7 @@ test("returned achievement data cannot mutate nested internal state", () => {
         sources: ["updated", { details: [{ note: "updated evidence" }] }]
       }]
     }),
+    verificationStatus: "unverified",
     createdAt,
     updatedAt
   }]);

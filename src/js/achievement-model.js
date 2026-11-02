@@ -12,11 +12,13 @@ const achievementInputFields = [
 const achievementRecordFields = [
   "id",
   ...achievementInputFields,
+  "verificationStatus",
   "createdAt",
   "updatedAt"
 ];
 const metadataFields = ["id", "createdAt"];
 const metricFields = ["name", "value", "unit", "period", "basis"];
+const verificationStatuses = ["unverified", "needs_confirmation", "verified"];
 
 function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -240,6 +242,18 @@ function validateAchievementFields(value, errors) {
   }
 
   addEmploymentIdErrors(value, errors, true);
+
+  if (!Object.hasOwn(value, "verificationStatus")) {
+    errors.push({
+      field: "verificationStatus",
+      message: "This field is required."
+    });
+  } else if (!verificationStatuses.includes(value.verificationStatus)) {
+    errors.push({
+      field: "verificationStatus",
+      message: 'This field must be "unverified", "needs_confirmation", or "verified".'
+    });
+  }
 }
 
 function addMetadataErrors(metadata) {
@@ -328,7 +342,8 @@ export function createAchievementRecord(input, metadata) {
     potentialImpact: input.potentialImpact ?? "",
     metrics: input.metrics ?? [],
     evidence: input.evidence ?? [],
-    employmentId: input.employmentId ?? null
+    employmentId: input.employmentId ?? null,
+    verificationStatus: "unverified"
   };
   const record = {
     id: metadata.id,

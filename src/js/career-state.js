@@ -23,10 +23,12 @@ function copyNestedData(value, copies = new WeakMap()) {
       return copies.get(value);
     }
 
-    const copy = [];
+    const copy = new Array(value.length);
     copies.set(value, copy);
-    for (const item of value) {
-      copy.push(copyNestedData(item, copies));
+    for (let index = 0; index < value.length; index += 1) {
+      if (Object.hasOwn(value, index)) {
+        copy[index] = copyNestedData(value[index], copies);
+      }
     }
     return copy;
   }
@@ -59,6 +61,94 @@ function copyNestedData(value, copies = new WeakMap()) {
 
 function copyAchievementRecord(record) {
   return copyNestedData(record);
+}
+
+function isPlainObject(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function areValuesEqual(first, second, comparedPairs = new WeakMap()) {
+  if (Object.is(first, second)) {
+    return true;
+  }
+
+  if (Array.isArray(first) || Array.isArray(second)) {
+    if (!Array.isArray(first) || !Array.isArray(second) || first.length !== second.length) {
+      return false;
+    }
+
+    let comparedValues = comparedPairs.get(first);
+    if (comparedValues?.has(second)) {
+      return true;
+    }
+    if (!comparedValues) {
+      comparedValues = new WeakSet();
+      comparedPairs.set(first, comparedValues);
+    }
+    comparedValues.add(second);
+
+    for (let index = 0; index < first.length; index += 1) {
+      const firstHasValue = Object.hasOwn(first, index);
+      if (firstHasValue !== Object.hasOwn(second, index)) {
+        return false;
+      }
+      if (firstHasValue && !areValuesEqual(first[index], second[index], comparedPairs)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (!isPlainObject(first) || !isPlainObject(second)) {
+    return false;
+  }
+
+  let comparedValues = comparedPairs.get(first);
+  if (comparedValues?.has(second)) {
+    return true;
+  }
+  if (!comparedValues) {
+    comparedValues = new WeakSet();
+    comparedPairs.set(first, comparedValues);
+  }
+  comparedValues.add(second);
+
+  const firstKeys = Reflect.ownKeys(first);
+  const secondKeys = Reflect.ownKeys(second);
+  if (firstKeys.length !== secondKeys.length) {
+    return false;
+  }
+
+  for (const key of firstKeys) {
+    if (!Object.hasOwn(second, key)
+      || !areValuesEqual(first[key], second[key], comparedPairs)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const achievementContentFields = [
+  "title",
+  "context",
+  "contribution",
+  "actions",
+  "outcome",
+  "potentialImpact",
+  "metrics",
+  "evidence",
+  "employmentId"
+];
+
+function hasAchievementContentChanged(existingRecord, updatedRecord) {
+  return achievementContentFields.some((field) =>
+    !areValuesEqual(existingRecord[field], updatedRecord[field])
+  );
 }
 
 function throwValidationError(recordName, errors) {
@@ -107,6 +197,8 @@ function assertEditableInput(input, reservedFields, recordName) {
  *   `{ id, createdAt }`, and validate any employment link.
  * - updateAchievementRecord(id, input, updatedAt): update all record fields
  *   while preserving its ID and creation timestamp.
+ * - updateAchievementVerificationStatus(id, status, updatedAt): deliberately
+ *   update verification status while preserving the record content.
  * - deleteAchievementRecord(id): remove a record by ID.
  * - getProfile(): return a safe profile copy, or null when absent.
  * - getEmploymentRecords(): return a new array containing safe record copies.
@@ -204,7 +296,15 @@ export function createCareerState() {
           return record;
         }
 
-        return { ...copyAchievementRecord(record), employmentId: null };
+        const updatedRecord = {
+          ...copyAchievementRecord(record),
+          employmentId: null,
+          verificationStatus: record.verificationStatus === "verified"
+            ? "unverified"
+            : record.verificationStatus
+        };
+        validateRecord(updatedRecord, validateAchievementRecord, "Achievement record");
+        return updatedRecord;
       });
 
       employmentRecords.splice(recordIndex, 1);
@@ -231,15 +331,43 @@ export function createCareerState() {
         throw new Error(`Achievement record "${id}" does not exist.`);
       }
 
-      assertEditableInput(input, ["id", "createdAt", "updatedAt"], "Achievement");
+      assertEditableInput(
+        input,
+        ["id", "createdAt", "updatedAt", "verificationStatus"],
+        "Achievement"
+      );
       const existingRecord = achievementRecords[recordIndex];
       const updatedRecord = createAchievementRecord(input, {
         id: existingRecord.id,
         createdAt: existingRecord.createdAt
       });
       updatedRecord.updatedAt = updatedAt;
+      const contentChanged = hasAchievementContentChanged(existingRecord, updatedRecord);
+      updatedRecord.verificationStatus = contentChanged
+        && existingRecord.verificationStatus === "verified"
+        ? "unverified"
+        : existingRecord.verificationStatus;
       validateRecord(updatedRecord, validateAchievementRecord, "Achievement record");
       assertEmploymentLinkExists(updatedRecord);
+
+      achievementRecords[recordIndex] = copyAchievementRecord(updatedRecord);
+      return copyAchievementRecord(achievementRecords[recordIndex]);
+    },
+
+    updateAchievementVerificationStatus(id, status, updatedAt) {
+      const recordIndex = achievementRecords.findIndex((record) => record.id === id);
+
+      if (recordIndex === -1) {
+        throw new Error(`Achievement record "${id}" does not exist.`);
+      }
+
+      const existingRecord = achievementRecords[recordIndex];
+      const updatedRecord = {
+        ...copyAchievementRecord(existingRecord),
+        verificationStatus: status,
+        updatedAt
+      };
+      validateRecord(updatedRecord, validateAchievementRecord, "Achievement record");
 
       achievementRecords[recordIndex] = copyAchievementRecord(updatedRecord);
       return copyAchievementRecord(achievementRecords[recordIndex]);

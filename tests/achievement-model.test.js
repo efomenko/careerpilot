@@ -27,6 +27,7 @@ function achievementRecord(overrides = {}) {
     metrics: [],
     evidence: [],
     employmentId: null,
+    verificationStatus: "unverified",
     createdAt: timestamp,
     updatedAt: timestamp,
     ...overrides
@@ -71,7 +72,34 @@ test("defaults omitted optional fields and arrays", () => {
   });
 
   assert.deepEqual(record, achievementRecord());
+  assert.equal(record.verificationStatus, "unverified");
   assert.equal(validateAchievementRecord(record).valid, true);
+});
+
+test("accepts each supported verification status on complete records", () => {
+  for (const verificationStatus of [
+    "unverified",
+    "needs_confirmation",
+    "verified"
+  ]) {
+    assert.deepEqual(
+      validateAchievementRecord(achievementRecord({ verificationStatus })),
+      { valid: true, errors: [] }
+    );
+  }
+});
+
+test("rejects missing, invalid, and non-string verification statuses", () => {
+  const missingStatus = achievementRecord();
+  delete missingStatus.verificationStatus;
+  assertInvalidField(validateAchievementRecord(missingStatus), "verificationStatus");
+
+  for (const verificationStatus of ["pending", "Verified", "", null, 1, false]) {
+    assertInvalidField(
+      validateAchievementRecord(achievementRecord({ verificationStatus })),
+      "verificationStatus"
+    );
+  }
 });
 
 test("validates normalized optional string fields on complete records", () => {
@@ -200,14 +228,14 @@ test("rejects non-object metrics and unexpected metric properties", () => {
 });
 
 test("rejects unexpected achievement and metadata properties", () => {
-  const inputWithUnknown = achievementInput({ verificationStatus: "verified" });
+  const inputWithUnknown = achievementInput({ unrecognized: "value" });
   assert.throws(
     () => createAchievementRecord(inputWithUnknown, {
       id: "id",
       createdAt: timestamp
     }),
     (error) => error instanceof TypeError
-      && error.errors.some((item) => item.field === "verificationStatus")
+      && error.errors.some((item) => item.field === "unrecognized")
   );
 
   assert.throws(
@@ -223,6 +251,31 @@ test("rejects unexpected achievement and metadata properties", () => {
   assertInvalidField(
     validateAchievementRecord(achievementRecord({ extra: true })),
     "extra"
+  );
+  assertInvalidField(
+    validateAchievementRecord(achievementRecord({
+      metrics: [{
+        name: "Count",
+        value: 1,
+        unit: "items",
+        basis: "measured",
+        verificationStatus: "verified"
+      }]
+    })),
+    "metrics[0].verificationStatus"
+  );
+});
+
+test("keeps verification status out of ordinary achievement input", () => {
+  assert.throws(
+    () => createAchievementRecord(achievementInput({
+      verificationStatus: "verified"
+    }), {
+      id: "id",
+      createdAt: timestamp
+    }),
+    (error) => error instanceof TypeError
+      && error.errors.some((item) => item.field === "verificationStatus")
   );
 });
 

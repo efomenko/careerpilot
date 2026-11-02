@@ -70,6 +70,11 @@ const achievementControls = {
   potentialImpact: document.querySelector("#achievement-potential-impact"),
   employmentId: achievementEmployment
 };
+const achievementVerificationStatuses = [
+  { value: "unverified", label: "Unverified" },
+  { value: "needs_confirmation", label: "Needs confirmation" },
+  { value: "verified", label: "Verified" }
+];
 let editingAchievementId = null;
 let achievementEntryNumber = 0;
 let achievementErrorTargets = {};
@@ -719,13 +724,43 @@ function appendAchievementText(parent, label, value, className = "achievement-re
   parent.append(section);
 }
 
+function getAchievementVerificationLabel(status) {
+  return achievementVerificationStatuses.find((item) => item.value === status)?.label
+    || "Unknown";
+}
+
+function updateAchievementVerificationStatus(recordId, select) {
+  clearFeedback(achievementFeedback);
+
+  try {
+    const updatedRecord = careerState.updateAchievementVerificationStatus(
+      recordId,
+      select.value,
+      new Date().toISOString()
+    );
+    renderAchievementRecords();
+    showFeedback(
+      achievementFeedback,
+      "success",
+      `Verification status updated to ${getAchievementVerificationLabel(updatedRecord.verificationStatus)}.`
+    );
+  } catch (error) {
+    renderAchievementRecords();
+    showFeedback(
+      achievementFeedback,
+      "error",
+      error.message || "The verification status could not be updated."
+    );
+  }
+}
+
 function renderAchievementRecords() {
   const records = careerState.getAchievementRecords();
   achievementList.replaceChildren();
   achievementEmpty.hidden = records.length > 0;
   renderAchievementEmploymentOptions();
 
-  records.forEach((record) => {
+  records.forEach((record, index) => {
     const article = document.createElement("article");
     article.className = "achievement-record";
     article.setAttribute("role", "listitem");
@@ -734,6 +769,47 @@ function renderAchievementRecords() {
     heading.className = "achievement-record-title";
     heading.textContent = record.title;
     article.append(heading);
+
+    const verification = document.createElement("section");
+    verification.className = "achievement-verification";
+    verification.setAttribute("aria-labelledby", `achievement-status-heading-${index}`);
+    const verificationHeading = document.createElement("h4");
+    verificationHeading.className = "achievement-verification-heading";
+    verificationHeading.id = `achievement-status-heading-${index}`;
+    verificationHeading.textContent = "Verification status";
+    const currentStatus = document.createElement("p");
+    currentStatus.className = "achievement-verification-current";
+    currentStatus.textContent = getAchievementVerificationLabel(record.verificationStatus);
+    const statusControl = document.createElement("div");
+    statusControl.className = "achievement-verification-control";
+    const statusSelectId = `achievement-status-select-${index}`;
+    const statusLabel = document.createElement("label");
+    statusLabel.htmlFor = statusSelectId;
+    statusLabel.textContent = `Change verification status for ${record.title}`;
+    const statusSelect = document.createElement("select");
+    statusSelect.className = "achievement-status-select";
+    statusSelect.id = statusSelectId;
+    statusSelect.setAttribute(
+      "aria-describedby",
+      `achievement-verification-help achievement-status-heading-${index}`
+    );
+    achievementVerificationStatuses.forEach(({ value, label }) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      statusSelect.append(option);
+    });
+    statusSelect.value = record.verificationStatus;
+    const statusButton = document.createElement("button");
+    statusButton.className = "achievement-secondary achievement-status-update";
+    statusButton.type = "button";
+    statusButton.textContent = "Update status";
+    statusButton.addEventListener("click", () =>
+      updateAchievementVerificationStatus(record.id, statusSelect)
+    );
+    statusControl.append(statusLabel, statusSelect, statusButton);
+    verification.append(verificationHeading, currentStatus, statusControl);
+    article.append(verification);
 
     if (record.context) {
       appendAchievementText(article, "Context", record.context);
@@ -919,23 +995,30 @@ function saveAchievementRecord(event) {
 
   try {
     const input = readAchievementForm();
+    let successMessage;
     if (editingAchievementId) {
-      careerState.updateAchievementRecord(
+      const existingRecord = careerState.getAchievementRecords()
+        .find((record) => record.id === editingAchievementId);
+      const updatedRecord = careerState.updateAchievementRecord(
         editingAchievementId,
         input,
         new Date().toISOString()
       );
-      showFeedback(achievementFeedback, "success", "Achievement updated for this session.");
+      successMessage = existingRecord.verificationStatus === "verified"
+        && updatedRecord.verificationStatus === "unverified"
+        ? "Achievement content changed. Verification was reset to Unverified."
+        : "Achievement updated for this session.";
     } else {
       careerState.addAchievementRecord(input, {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       });
-      showFeedback(achievementFeedback, "success", "Achievement added for this session.");
+      successMessage = "Achievement added for this session.";
     }
 
     resetAchievementForm();
     renderAchievementRecords();
+    showFeedback(achievementFeedback, "success", successMessage);
   } catch (error) {
     if (Array.isArray(error.errors)) {
       showAchievementValidationErrors(error.errors);
