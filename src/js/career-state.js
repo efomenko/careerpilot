@@ -4,6 +4,10 @@ import {
   validateCareerProfile,
   validateEmploymentRecord
 } from "./career-model.js";
+import {
+  createAchievementRecord,
+  validateAchievementRecord
+} from "./achievement-model.js";
 
 function copyProfile(profile) {
   return profile ? { ...profile, skills: [...profile.skills] } : null;
@@ -11,6 +15,50 @@ function copyProfile(profile) {
 
 function copyEmploymentRecord(record) {
   return { ...record, responsibilities: [...record.responsibilities] };
+}
+
+function copyNestedData(value, copies = new WeakMap()) {
+  if (Array.isArray(value)) {
+    if (copies.has(value)) {
+      return copies.get(value);
+    }
+
+    const copy = [];
+    copies.set(value, copy);
+    for (const item of value) {
+      copy.push(copyNestedData(item, copies));
+    }
+    return copy;
+  }
+
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return value;
+  }
+
+  if (copies.has(value)) {
+    return copies.get(value);
+  }
+
+  const copy = Object.create(prototype);
+  copies.set(value, copy);
+  for (const key of Object.keys(value)) {
+    Object.defineProperty(copy, key, {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: copyNestedData(value[key], copies)
+    });
+  }
+  return copy;
+}
+
+function copyAchievementRecord(record) {
+  return copyNestedData(record);
 }
 
 function throwValidationError(recordName, errors) {
@@ -55,8 +103,14 @@ function assertEditableInput(input, reservedFields, recordName) {
  * - updateEmploymentRecord(id, input, updatedAt): update all record fields
  *   while preserving its ID and creation timestamp.
  * - deleteEmploymentRecord(id): remove a record by ID.
+ * - addAchievementRecord(input, metadata): add a record using caller-supplied
+ *   `{ id, createdAt }`, and validate any employment link.
+ * - updateAchievementRecord(id, input, updatedAt): update all record fields
+ *   while preserving its ID and creation timestamp.
+ * - deleteAchievementRecord(id): remove a record by ID.
  * - getProfile(): return a safe profile copy, or null when absent.
  * - getEmploymentRecords(): return a new array containing safe record copies.
+ * - getAchievementRecords(): return a new array containing safe record copies.
  *
  * Invalid records throw TypeError; unknown IDs and duplicate IDs throw Error.
  * No browser APIs, persistence, clock, or ID generation are used.
@@ -64,6 +118,18 @@ function assertEditableInput(input, reservedFields, recordName) {
 export function createCareerState() {
   let profile = null;
   const employmentRecords = [];
+  let achievementRecords = [];
+
+  function assertEmploymentLinkExists(record) {
+    if (
+      record.employmentId !== null
+      && !employmentRecords.some((employment) => employment.id === record.employmentId)
+    ) {
+      throw new Error(
+        `Employment History record "${record.employmentId}" does not exist.`
+      );
+    }
+  }
 
   return {
     createProfile(input, metadata) {
@@ -133,7 +199,60 @@ export function createCareerState() {
         throw new Error(`Employment History record "${id}" does not exist.`);
       }
 
+      const updatedAchievements = achievementRecords.map((record) => {
+        if (record.employmentId !== id) {
+          return record;
+        }
+
+        return { ...copyAchievementRecord(record), employmentId: null };
+      });
+
       employmentRecords.splice(recordIndex, 1);
+      achievementRecords = updatedAchievements;
+    },
+
+    addAchievementRecord(input, metadata) {
+      const newRecord = createAchievementRecord(input, metadata);
+      validateRecord(newRecord, validateAchievementRecord, "Achievement record");
+
+      if (achievementRecords.some((record) => record.id === newRecord.id)) {
+        throw new Error(`An Achievement record with ID "${newRecord.id}" already exists.`);
+      }
+
+      assertEmploymentLinkExists(newRecord);
+      achievementRecords.push(copyAchievementRecord(newRecord));
+      return copyAchievementRecord(newRecord);
+    },
+
+    updateAchievementRecord(id, input, updatedAt) {
+      const recordIndex = achievementRecords.findIndex((record) => record.id === id);
+
+      if (recordIndex === -1) {
+        throw new Error(`Achievement record "${id}" does not exist.`);
+      }
+
+      assertEditableInput(input, ["id", "createdAt", "updatedAt"], "Achievement");
+      const existingRecord = achievementRecords[recordIndex];
+      const updatedRecord = createAchievementRecord(input, {
+        id: existingRecord.id,
+        createdAt: existingRecord.createdAt
+      });
+      updatedRecord.updatedAt = updatedAt;
+      validateRecord(updatedRecord, validateAchievementRecord, "Achievement record");
+      assertEmploymentLinkExists(updatedRecord);
+
+      achievementRecords[recordIndex] = copyAchievementRecord(updatedRecord);
+      return copyAchievementRecord(achievementRecords[recordIndex]);
+    },
+
+    deleteAchievementRecord(id) {
+      const recordIndex = achievementRecords.findIndex((record) => record.id === id);
+
+      if (recordIndex === -1) {
+        throw new Error(`Achievement record "${id}" does not exist.`);
+      }
+
+      achievementRecords.splice(recordIndex, 1);
     },
 
     getProfile() {
@@ -142,6 +261,10 @@ export function createCareerState() {
 
     getEmploymentRecords() {
       return employmentRecords.map(copyEmploymentRecord);
+    },
+
+    getAchievementRecords() {
+      return achievementRecords.map(copyAchievementRecord);
     }
   };
 }

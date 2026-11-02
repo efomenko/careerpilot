@@ -51,6 +51,28 @@ const employmentFieldErrors = {
 };
 const employmentFields = Object.keys(employmentControls);
 let editingEmploymentId = null;
+const achievementForm = document.querySelector("#achievement-form");
+const achievementList = document.querySelector("#achievement-list");
+const achievementEmpty = document.querySelector("#achievement-empty");
+const achievementFeedback = document.querySelector("#achievement-feedback");
+const achievementFormTitle = document.querySelector("#achievement-form-title");
+const achievementSubmit = document.querySelector("#achievement-submit");
+const achievementCancel = document.querySelector("#achievement-cancel");
+const achievementActions = document.querySelector("#achievement-actions");
+const achievementMetrics = document.querySelector("#achievement-metrics");
+const achievementEvidence = document.querySelector("#achievement-evidence");
+const achievementEmployment = document.querySelector("#achievement-employment");
+const achievementControls = {
+  title: document.querySelector("#achievement-title"),
+  context: document.querySelector("#achievement-context"),
+  contribution: document.querySelector("#achievement-contribution"),
+  outcome: document.querySelector("#achievement-outcome"),
+  potentialImpact: document.querySelector("#achievement-potential-impact"),
+  employmentId: achievementEmployment
+};
+let editingAchievementId = null;
+let achievementEntryNumber = 0;
+let achievementErrorTargets = {};
 
 // Each view supplies the label and status shown when its hash is selected.
 const views = {
@@ -67,7 +89,7 @@ const views = {
   achievements: {
     label: "Achievements",
     title: "Make your achievements count.",
-    status: "Achievement management is planned for a future development task."
+    status: "Your achievements and supporting evidence are ready to manage."
   },
   jobs: {
     label: "Job Opportunities",
@@ -400,6 +422,7 @@ function saveEmploymentRecord(event) {
 
     resetEmploymentForm();
     renderEmploymentRecords();
+    renderAchievementRecords();
   } catch (error) {
     if (Array.isArray(error.errors)) {
       showEmploymentValidationErrors(error.errors);
@@ -419,6 +442,7 @@ function deleteEmploymentRecord(record) {
   try {
     careerState.deleteEmploymentRecord(record.id);
     renderEmploymentRecords();
+    renderAchievementRecords();
     if (editingEmploymentId === record.id) {
       resetEmploymentForm();
     }
@@ -429,6 +453,518 @@ function deleteEmploymentRecord(record) {
       employmentFeedback,
       "error",
       error.message || "The employment record could not be deleted."
+    );
+  }
+}
+
+function clearAchievementFieldErrors() {
+  achievementForm.querySelectorAll(".achievement-field").forEach((field) => {
+    const control = field.querySelector("input, textarea, select");
+    const error = field.querySelector(".achievement-field-error");
+
+    if (control && error) {
+      clearFieldError(control, error);
+    }
+  });
+  achievementErrorTargets = {};
+}
+
+function createAchievementField(parent, labelText, type, options = {}) {
+  const field = document.createElement("div");
+  field.className = "achievement-field";
+
+  const id = `achievement-entry-${achievementEntryNumber}`;
+  achievementEntryNumber += 1;
+
+  const label = document.createElement("label");
+  label.htmlFor = id;
+  label.textContent = labelText;
+
+  let control;
+  if (type === "textarea") {
+    control = document.createElement("textarea");
+    control.rows = options.rows || 3;
+  } else if (type === "select") {
+    control = document.createElement("select");
+    options.values.forEach(({ value, label: optionLabel }) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = optionLabel;
+      control.append(option);
+    });
+  } else {
+    control = document.createElement("input");
+    control.type = type;
+    if (options.step) {
+      control.step = options.step;
+    }
+  }
+
+  control.id = id;
+  control.value = options.value ?? "";
+  control.setAttribute("aria-describedby", `${id}-error`);
+  if (options.helpId) {
+    control.setAttribute("aria-describedby", `${options.helpId} ${id}-error`);
+  }
+  if (options.fieldAttribute) {
+    control.dataset[options.fieldAttribute.name] = options.fieldAttribute.value;
+  }
+
+  const error = document.createElement("p");
+  error.className = "achievement-field-error";
+  error.id = `${id}-error`;
+  error.hidden = true;
+
+  field.append(label, control, error);
+  parent.append(field);
+  return control;
+}
+
+function addAchievementAction(value = "") {
+  const row = document.createElement("div");
+  row.className = "achievement-entry achievement-action-entry";
+  const actionIndex = achievementActions.children.length;
+  const action = createAchievementField(
+    row,
+    `Action ${actionIndex + 1}`,
+    "text",
+    { value }
+  );
+  const remove = document.createElement("button");
+  remove.className = "achievement-remove";
+  remove.type = "button";
+  remove.textContent = "Remove";
+  remove.setAttribute("aria-label", `Remove action ${actionIndex + 1}`);
+  remove.addEventListener("click", () => {
+    row.remove();
+    renumberAchievementEntries(achievementActions, "Action", "Remove action");
+    clearAchievementFieldErrors();
+    clearFeedback(achievementFeedback);
+    document.querySelector("#achievement-add-action").focus();
+  });
+  row.append(remove);
+  achievementActions.append(row);
+  action.focus();
+}
+
+function addAchievementMetric(metric = {}) {
+  const row = document.createElement("div");
+  row.className = "achievement-entry achievement-metric-entry";
+  const fields = document.createElement("div");
+  fields.className = "achievement-metric-fields";
+  const fieldAttribute = (value) => ({
+    name: "metricField",
+    value
+  });
+
+  createAchievementField(fields, "Metric name", "text", {
+    value: metric.name,
+    fieldAttribute: fieldAttribute("name")
+  });
+  createAchievementField(fields, "Value", "number", {
+    value: metric.value,
+    step: "any",
+    fieldAttribute: fieldAttribute("value")
+  });
+  createAchievementField(fields, "Unit", "text", {
+    value: metric.unit,
+    fieldAttribute: fieldAttribute("unit")
+  });
+  createAchievementField(fields, "Period (optional)", "text", {
+    value: metric.period,
+    fieldAttribute: fieldAttribute("period")
+  });
+  createAchievementField(fields, "Basis", "select", {
+    value: metric.basis || "measured",
+    values: [
+      { value: "measured", label: "Measured" },
+      { value: "estimated", label: "Estimated" }
+    ],
+    fieldAttribute: fieldAttribute("basis")
+  });
+
+  const remove = document.createElement("button");
+  remove.className = "achievement-remove";
+  remove.type = "button";
+  remove.textContent = "Remove metric";
+  remove.addEventListener("click", () => {
+    row.remove();
+    clearAchievementFieldErrors();
+    clearFeedback(achievementFeedback);
+    document.querySelector("#achievement-add-metric").focus();
+  });
+
+  row.append(fields, remove);
+  achievementMetrics.append(row);
+  fields.querySelector("input").focus();
+}
+
+function addAchievementEvidence(value = "") {
+  const row = document.createElement("div");
+  row.className = "achievement-entry achievement-evidence-entry";
+  const evidenceIndex = achievementEvidence.children.length;
+  const evidence = createAchievementField(
+    row,
+    `Evidence entry ${evidenceIndex + 1} (JSON)`,
+    "textarea",
+    {
+      value,
+      helpId: "achievement-evidence-help"
+    }
+  );
+  const remove = document.createElement("button");
+  remove.className = "achievement-remove";
+  remove.type = "button";
+  remove.textContent = "Remove evidence";
+  remove.setAttribute("aria-label", `Remove evidence entry ${evidenceIndex + 1}`);
+  remove.addEventListener("click", () => {
+    row.remove();
+    renumberAchievementEntries(achievementEvidence, "Evidence entry", "Remove evidence entry");
+    clearAchievementFieldErrors();
+    clearFeedback(achievementFeedback);
+    document.querySelector("#achievement-add-evidence").focus();
+  });
+  row.append(remove);
+  achievementEvidence.append(row);
+  evidence.focus();
+}
+
+function refreshAchievementErrorTargets() {
+  achievementErrorTargets = { ...achievementControls };
+
+  achievementActions.querySelectorAll(".achievement-action-entry").forEach((row, index) => {
+    achievementErrorTargets[`actions[${index}]`] = row.querySelector("input");
+  });
+
+  achievementMetrics.querySelectorAll(".achievement-metric-entry").forEach((row, index) => {
+    row.querySelectorAll("[data-metric-field]").forEach((control) => {
+      achievementErrorTargets[`metrics[${index}].${control.dataset.metricField}`] = control;
+    });
+  });
+
+  achievementEvidence.querySelectorAll(".achievement-evidence-entry").forEach((row, index) => {
+    achievementErrorTargets[`evidence[${index}]`] = row.querySelector("textarea");
+  });
+}
+
+function renumberAchievementEntries(container, labelPrefix, removeLabel) {
+  container.querySelectorAll(".achievement-action-entry, .achievement-evidence-entry")
+    .forEach((row, index) => {
+      const number = index + 1;
+      const label = row.querySelector("label");
+      const remove = row.querySelector(".achievement-remove");
+
+      if (label) {
+        label.textContent = labelPrefix === "Action"
+          ? `Action ${number}`
+          : `${labelPrefix} ${number} (JSON)`;
+      }
+      if (remove) {
+        remove.setAttribute("aria-label", `${removeLabel} ${number}`);
+      }
+    });
+}
+
+function showAchievementValidationErrors(errors) {
+  refreshAchievementErrorTargets();
+  const invalidFields = [];
+
+  errors.forEach(({ field, message }) => {
+    const control = achievementErrorTargets[field];
+    if (!control) {
+      return;
+    }
+
+    const error = control.closest(".achievement-field")?.querySelector(".achievement-field-error");
+    if (!error) {
+      return;
+    }
+
+    showFieldError(control, error, message);
+    invalidFields.push(control);
+  });
+
+  invalidFields[0]?.focus();
+}
+
+function renderAchievementEmploymentOptions(selectedId = achievementEmployment.value) {
+  achievementEmployment.replaceChildren();
+
+  const unlinkedOption = document.createElement("option");
+  unlinkedOption.value = "";
+  unlinkedOption.textContent = "No employment link";
+  achievementEmployment.append(unlinkedOption);
+
+  careerState.getEmploymentRecords().forEach((record) => {
+    const option = document.createElement("option");
+    option.value = record.id;
+    option.textContent = `${record.roleTitle} — ${record.employer}`;
+    achievementEmployment.append(option);
+  });
+
+  const hasSelection = [...achievementEmployment.options]
+    .some((option) => option.value === selectedId);
+  achievementEmployment.value = hasSelection ? selectedId : "";
+}
+
+function appendAchievementText(parent, label, value, className = "achievement-record-text") {
+  const section = document.createElement("div");
+  section.className = "achievement-record-section";
+  const heading = document.createElement("h4");
+  heading.textContent = label;
+  const text = document.createElement("p");
+  text.className = className;
+  text.textContent = value;
+  section.append(heading, text);
+  parent.append(section);
+}
+
+function renderAchievementRecords() {
+  const records = careerState.getAchievementRecords();
+  achievementList.replaceChildren();
+  achievementEmpty.hidden = records.length > 0;
+  renderAchievementEmploymentOptions();
+
+  records.forEach((record) => {
+    const article = document.createElement("article");
+    article.className = "achievement-record";
+    article.setAttribute("role", "listitem");
+
+    const heading = document.createElement("h3");
+    heading.className = "achievement-record-title";
+    heading.textContent = record.title;
+    article.append(heading);
+
+    if (record.context) {
+      appendAchievementText(article, "Context", record.context);
+    }
+    appendAchievementText(article, "Contribution", record.contribution);
+    if (record.outcome) {
+      appendAchievementText(article, "Actual outcome", record.outcome);
+    }
+    if (record.potentialImpact) {
+      appendAchievementText(article, "Potential impact", record.potentialImpact);
+    }
+
+    if (record.actions.length > 0) {
+      const section = document.createElement("div");
+      section.className = "achievement-record-section";
+      const actionsHeading = document.createElement("h4");
+      actionsHeading.textContent = "Actions";
+      const actions = document.createElement("ul");
+      actions.className = "achievement-record-list";
+      record.actions.forEach((action) => {
+        const item = document.createElement("li");
+        item.textContent = action;
+        actions.append(item);
+      });
+      section.append(actionsHeading, actions);
+      article.append(section);
+    }
+
+    if (record.metrics.length > 0) {
+      const section = document.createElement("div");
+      section.className = "achievement-record-section";
+      const metricsHeading = document.createElement("h4");
+      metricsHeading.textContent = "Metrics";
+      const metrics = document.createElement("ul");
+      metrics.className = "achievement-record-list";
+      record.metrics.forEach((metric) => {
+        const item = document.createElement("li");
+        const period = Object.hasOwn(metric, "period") && metric.period !== ""
+          ? ` (${metric.period})`
+          : "";
+        item.textContent = `${metric.name}: ${metric.value} ${metric.unit}${period} — ${metric.basis}`;
+        metrics.append(item);
+      });
+      section.append(metricsHeading, metrics);
+      article.append(section);
+    }
+
+    if (record.evidence.length > 0) {
+      const section = document.createElement("div");
+      section.className = "achievement-record-section";
+      const evidenceHeading = document.createElement("h4");
+      evidenceHeading.textContent = "Supporting evidence";
+      const evidence = document.createElement("ul");
+      evidence.className = "achievement-record-list";
+      record.evidence.forEach((value) => {
+        const item = document.createElement("li");
+        const formatted = document.createElement("pre");
+        formatted.className = "achievement-evidence-value";
+        formatted.textContent = JSON.stringify(value, null, 2);
+        item.append(formatted);
+        evidence.append(item);
+      });
+      section.append(evidenceHeading, evidence);
+      article.append(section);
+    }
+
+    if (record.employmentId) {
+      const employment = careerState.getEmploymentRecords()
+        .find((item) => item.id === record.employmentId);
+      appendAchievementText(
+        article,
+        "Employment",
+        employment
+          ? `${employment.roleTitle} — ${employment.employer}`
+          : "Linked employment record unavailable"
+      );
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "achievement-record-actions";
+    const editButton = document.createElement("button");
+    editButton.className = "achievement-action-button";
+    editButton.type = "button";
+    editButton.textContent = "Edit";
+    editButton.setAttribute("aria-label", `Edit achievement: ${record.title}`);
+    editButton.addEventListener("click", () => beginAchievementEdit(record));
+
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "achievement-action-button achievement-action-button--delete";
+    deleteButton.type = "button";
+    deleteButton.textContent = "Delete";
+    deleteButton.setAttribute("aria-label", `Delete achievement: ${record.title}`);
+    deleteButton.addEventListener("click", () => deleteAchievementRecord(record));
+    actions.append(editButton, deleteButton);
+    article.append(actions);
+    achievementList.append(article);
+  });
+}
+
+function resetAchievementForm() {
+  achievementForm.reset();
+  achievementActions.replaceChildren();
+  achievementMetrics.replaceChildren();
+  achievementEvidence.replaceChildren();
+  editingAchievementId = null;
+  achievementFormTitle.textContent = "Add achievement";
+  achievementSubmit.textContent = "Add achievement";
+  achievementCancel.hidden = true;
+  clearAchievementFieldErrors();
+}
+
+function beginAchievementEdit(record) {
+  clearFeedback(achievementFeedback);
+  resetAchievementForm();
+  editingAchievementId = record.id;
+  achievementControls.title.value = record.title;
+  achievementControls.context.value = record.context;
+  achievementControls.contribution.value = record.contribution;
+  achievementControls.outcome.value = record.outcome;
+  achievementControls.potentialImpact.value = record.potentialImpact;
+  renderAchievementEmploymentOptions(record.employmentId ?? "");
+  record.actions.forEach((action) => addAchievementAction(action));
+  record.metrics.forEach((metric) => addAchievementMetric(metric));
+  record.evidence.forEach((value) => addAchievementEvidence(JSON.stringify(value)));
+  achievementFormTitle.textContent = `Edit ${record.title}`;
+  achievementSubmit.textContent = "Save changes";
+  achievementCancel.hidden = false;
+  achievementControls.title.focus();
+}
+
+function readAchievementForm() {
+  refreshAchievementErrorTargets();
+  const metrics = [...achievementMetrics.querySelectorAll(".achievement-metric-entry")]
+    .map((row) => {
+      const metric = {};
+      row.querySelectorAll("[data-metric-field]").forEach((control) => {
+        const field = control.dataset.metricField;
+        if (field === "value") {
+          metric.value = control.value === "" ? "" : Number(control.value);
+        } else if (field === "period") {
+          if (control.value !== "") {
+            metric.period = control.value;
+          }
+        } else {
+          metric[field] = control.value;
+        }
+      });
+      return metric;
+    });
+  const evidence = [];
+
+  achievementEvidence.querySelectorAll("textarea").forEach((control, index) => {
+    try {
+      evidence.push(JSON.parse(control.value));
+    } catch {
+      const error = new TypeError(`Evidence entry ${index + 1} must contain valid JSON.`);
+      error.errors = [{
+        field: `evidence[${index}]`,
+        message: "Enter a valid JSON value."
+      }];
+      throw error;
+    }
+  });
+
+  return {
+    title: achievementControls.title.value,
+    context: achievementControls.context.value,
+    contribution: achievementControls.contribution.value,
+    actions: [...achievementActions.querySelectorAll("input")]
+      .map((control) => control.value),
+    outcome: achievementControls.outcome.value,
+    potentialImpact: achievementControls.potentialImpact.value,
+    metrics,
+    evidence,
+    employmentId: achievementEmployment.value || null
+  };
+}
+
+function saveAchievementRecord(event) {
+  event.preventDefault();
+  clearAchievementFieldErrors();
+  clearFeedback(achievementFeedback);
+
+  try {
+    const input = readAchievementForm();
+    if (editingAchievementId) {
+      careerState.updateAchievementRecord(
+        editingAchievementId,
+        input,
+        new Date().toISOString()
+      );
+      showFeedback(achievementFeedback, "success", "Achievement updated for this session.");
+    } else {
+      careerState.addAchievementRecord(input, {
+        id: createRecordId(),
+        createdAt: new Date().toISOString()
+      });
+      showFeedback(achievementFeedback, "success", "Achievement added for this session.");
+    }
+
+    resetAchievementForm();
+    renderAchievementRecords();
+  } catch (error) {
+    if (Array.isArray(error.errors)) {
+      showAchievementValidationErrors(error.errors);
+    }
+
+    showFeedback(
+      achievementFeedback,
+      "error",
+      error.message || "The achievement could not be saved."
+    );
+  }
+}
+
+function deleteAchievementRecord(record) {
+  clearFeedback(achievementFeedback);
+
+  try {
+    careerState.deleteAchievementRecord(record.id);
+    if (editingAchievementId === record.id) {
+      resetAchievementForm();
+    }
+    renderAchievementRecords();
+    showFeedback(achievementFeedback, "success", "Achievement deleted from this session.");
+    document.querySelector("#achievements-title").focus();
+  } catch (error) {
+    showFeedback(
+      achievementFeedback,
+      "error",
+      error.message || "The achievement could not be deleted."
     );
   }
 }
@@ -463,8 +999,48 @@ employmentCancel.addEventListener("click", () => {
   employmentControls.employer.focus();
 });
 
+achievementForm.addEventListener("submit", saveAchievementRecord);
+achievementForm.addEventListener("input", (event) => {
+  const field = event.target.closest(".achievement-field");
+  const control = field?.querySelector("input, textarea, select");
+  const error = field?.querySelector(".achievement-field-error");
+
+  if (control && error) {
+    clearFieldError(control, error);
+    clearFeedback(achievementFeedback);
+  }
+});
+achievementForm.addEventListener("change", (event) => {
+  const field = event.target.closest(".achievement-field");
+  const control = field?.querySelector("input, textarea, select");
+  const error = field?.querySelector(".achievement-field-error");
+
+  if (control && error) {
+    clearFieldError(control, error);
+    clearFeedback(achievementFeedback);
+  }
+});
+document.querySelector("#achievement-add-action").addEventListener("click", () => {
+  addAchievementAction();
+  clearFeedback(achievementFeedback);
+});
+document.querySelector("#achievement-add-metric").addEventListener("click", () => {
+  addAchievementMetric();
+  clearFeedback(achievementFeedback);
+});
+document.querySelector("#achievement-add-evidence").addEventListener("click", () => {
+  addAchievementEvidence();
+  clearFeedback(achievementFeedback);
+});
+achievementCancel.addEventListener("click", () => {
+  resetAchievementForm();
+  clearFeedback(achievementFeedback);
+  achievementControls.title.focus();
+});
+
 populateProfileForm(careerState.getProfile());
 renderEmploymentRecords();
+renderAchievementRecords();
 
 function closeMobileMenu(restoreFocus = false) {
   const wasOpen = sidebar.classList.contains("is-open");

@@ -356,18 +356,157 @@
         </section>
 
         <section
-          class="placeholder-view"
+          class="achievement-view"
           data-page-view="achievements"
           aria-labelledby="achievements-title"
           hidden
         >
-          <div class="placeholder-card">
+          <div class="achievement-card">
             <p class="eyebrow">YOUR CAREER EVIDENCE</p>
-            <h1 id="achievements-title">Achievements</h1>
-            <p class="placeholder-description">
-              A future place to record achievements and the evidence that supports them.
+            <h1 id="achievements-title" tabindex="-1">Achievements</h1>
+            <p class="achievement-description">
+              Record actual results separately from potential impact, and keep
+              supporting information together with each achievement.
             </p>
-            <p class="coming-soon">Coming soon</p>
+            <p class="achievement-memory-note">
+              Achievement data is held in memory for this session only and will
+              be lost when you reload this page.
+            </p>
+
+            <div
+              class="achievement-list"
+              id="achievement-list"
+              role="list"
+              aria-label="Achievement records"
+              aria-live="polite"
+            ></div>
+            <p class="achievement-empty" id="achievement-empty">
+              No achievements yet. Add your first achievement below.
+            </p>
+            <p class="achievement-feedback" id="achievement-feedback" hidden></p>
+
+            <form class="achievement-form" id="achievement-form" novalidate>
+              <h2 class="achievement-form-title" id="achievement-form-title">
+                Add achievement
+              </h2>
+
+              <div class="achievement-form-grid">
+                <div class="achievement-field">
+                  <label for="achievement-title">Title <span aria-hidden="true">*</span></label>
+                  <input
+                    id="achievement-title"
+                    name="title"
+                    type="text"
+                    aria-describedby="achievement-title-error"
+                    required
+                  >
+                  <p class="achievement-field-error" id="achievement-title-error" hidden></p>
+                </div>
+
+                <div class="achievement-field">
+                  <label for="achievement-context">Context</label>
+                  <textarea
+                    id="achievement-context"
+                    name="context"
+                    rows="3"
+                    aria-describedby="achievement-context-error"
+                  ></textarea>
+                  <p class="achievement-field-error" id="achievement-context-error" hidden></p>
+                </div>
+
+                <div class="achievement-field">
+                  <label for="achievement-contribution">Contribution <span aria-hidden="true">*</span></label>
+                  <textarea
+                    id="achievement-contribution"
+                    name="contribution"
+                    rows="3"
+                    aria-describedby="achievement-contribution-error"
+                    required
+                  ></textarea>
+                  <p class="achievement-field-error" id="achievement-contribution-error" hidden></p>
+                </div>
+
+                <div class="achievement-field">
+                  <label for="achievement-outcome">Actual outcome</label>
+                  <textarea
+                    id="achievement-outcome"
+                    name="outcome"
+                    rows="3"
+                    aria-describedby="achievement-outcome-help achievement-outcome-error"
+                  ></textarea>
+                  <p class="achievement-field-help" id="achievement-outcome-help">
+                    Describe a result that actually happened.
+                  </p>
+                  <p class="achievement-field-error" id="achievement-outcome-error" hidden></p>
+                </div>
+
+                <div class="achievement-field">
+                  <label for="achievement-potential-impact">Potential impact</label>
+                  <textarea
+                    id="achievement-potential-impact"
+                    name="potentialImpact"
+                    rows="3"
+                    aria-describedby="achievement-potential-impact-help achievement-potential-impact-error"
+                  ></textarea>
+                  <p class="achievement-field-help" id="achievement-potential-impact-help">
+                    Describe an expected, estimated, or possible benefit; this is separate from the actual outcome.
+                  </p>
+                  <p class="achievement-field-error" id="achievement-potential-impact-error" hidden></p>
+                </div>
+
+                <div class="achievement-field">
+                  <label for="achievement-employment">Employment record</label>
+                  <select
+                    id="achievement-employment"
+                    name="employmentId"
+                    aria-describedby="achievement-employment-error"
+                  >
+                    <option value="">No employment link</option>
+                  </select>
+                  <p class="achievement-field-error" id="achievement-employment-error" hidden></p>
+                </div>
+              </div>
+
+              <fieldset class="achievement-collection">
+                <legend>Actions</legend>
+                <p class="achievement-field-help">Add each action as a separate entry.</p>
+                <div class="achievement-entries" id="achievement-actions"></div>
+                <button class="achievement-secondary" id="achievement-add-action" type="button">
+                  Add action
+                </button>
+              </fieldset>
+
+              <fieldset class="achievement-collection">
+                <legend>Metrics</legend>
+                <p class="achievement-field-help">
+                  Add one or more metrics. A measured metric is not automatically verified.
+                </p>
+                <div class="achievement-entries" id="achievement-metrics"></div>
+                <button class="achievement-secondary" id="achievement-add-metric" type="button">
+                  Add metric
+                </button>
+              </fieldset>
+
+              <fieldset class="achievement-collection">
+                <legend>Supporting evidence</legend>
+                <p class="achievement-field-help" id="achievement-evidence-help">
+                  Enter each evidence value as JSON, such as a quoted string, number, object, array, boolean, or null.
+                </p>
+                <div class="achievement-entries" id="achievement-evidence"></div>
+                <button class="achievement-secondary" id="achievement-add-evidence" type="button">
+                  Add evidence entry
+                </button>
+              </fieldset>
+
+              <div class="achievement-form-actions">
+                <button class="achievement-submit" id="achievement-submit" type="submit">
+                  Add achievement
+                </button>
+                <button class="achievement-cancel" id="achievement-cancel" type="button" hidden>
+                  Cancel edit
+                </button>
+              </div>
+            </form>
           </div>
         </section>
 

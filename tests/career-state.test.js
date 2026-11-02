@@ -27,8 +27,27 @@ function employmentInput(overrides = {}) {
   };
 }
 
+function achievementInput(overrides = {}) {
+  return {
+    title: "Achievement",
+    context: "",
+    contribution: "Contribution",
+    actions: [],
+    outcome: "",
+    potentialImpact: "",
+    metrics: [],
+    evidence: [],
+    employmentId: null,
+    ...overrides
+  };
+}
+
 function addEmployment(state, id, input = employmentInput(), timestamp = createdAt) {
   return state.addEmploymentRecord(input, { id, createdAt: timestamp });
+}
+
+function addAchievement(state, id, input = achievementInput(), timestamp = createdAt) {
+  return state.addAchievementRecord(input, { id, createdAt: timestamp });
 }
 
 test("initializes empty profile and employment state", () => {
@@ -36,6 +55,7 @@ test("initializes empty profile and employment state", () => {
 
   assert.equal(state.getProfile(), null);
   assert.deepEqual(state.getEmploymentRecords(), []);
+  assert.deepEqual(state.getAchievementRecords(), []);
 });
 
 test("creates only one profile", () => {
@@ -120,6 +140,270 @@ test("deletes one employment record without affecting the others", () => {
   state.deleteEmploymentRecord("employment-1");
 
   assert.deepEqual(state.getEmploymentRecords(), [retained]);
+});
+
+test("adds, retrieves, updates, and deletes achievement records", () => {
+  const state = createCareerState();
+  const first = addAchievement(state, "achievement-1");
+  const second = addAchievement(state, "achievement-2", achievementInput({
+    title: "Second achievement"
+  }));
+
+  assert.equal(first.id, "achievement-1");
+  assert.equal(first.createdAt, createdAt);
+  assert.equal(first.updatedAt, createdAt);
+  assert.deepEqual(state.getAchievementRecords(), [first, second]);
+
+  const updated = state.updateAchievementRecord(
+    first.id,
+    achievementInput({
+      title: "Updated achievement",
+      outcome: "Actual result",
+      potentialImpact: "Possible benefit"
+    }),
+    updatedAt
+  );
+
+  assert.equal(updated.id, first.id);
+  assert.equal(updated.createdAt, first.createdAt);
+  assert.equal(updated.updatedAt, updatedAt);
+  assert.equal(updated.title, "Updated achievement");
+  assert.deepEqual(state.getAchievementRecords(), [updated, second]);
+
+  state.deleteAchievementRecord(first.id);
+  assert.deepEqual(state.getAchievementRecords(), [second]);
+});
+
+test("achievement updates apply constructor defaults and preserve identity timestamps", () => {
+  const state = createCareerState();
+  const employment = addEmployment(state, "employment-1");
+  const existing = addAchievement(state, "achievement-1", achievementInput({
+    context: "Old context",
+    actions: ["Old action"],
+    outcome: "Old outcome",
+    potentialImpact: "Old impact",
+    metrics: [{
+      name: "Old metric",
+      value: 1,
+      unit: "items",
+      basis: "measured"
+    }],
+    evidence: [{ reference: "old evidence" }],
+    employmentId: employment.id
+  }));
+
+  const updated = state.updateAchievementRecord("achievement-1", {
+    title: "Updated achievement",
+    contribution: "Updated contribution"
+  }, updatedAt);
+
+  assert.equal(updated.id, existing.id);
+  assert.equal(updated.createdAt, existing.createdAt);
+  assert.equal(updated.updatedAt, updatedAt);
+  assert.equal(updated.context, "");
+  assert.equal(updated.outcome, "");
+  assert.equal(updated.potentialImpact, "");
+  assert.deepEqual(updated.actions, []);
+  assert.deepEqual(updated.metrics, []);
+  assert.deepEqual(updated.evidence, []);
+  assert.equal(updated.employmentId, null);
+  assert.deepEqual(state.getAchievementRecords(), [updated]);
+});
+
+test("rejects duplicate achievement IDs and unknown achievement IDs", () => {
+  const state = createCareerState();
+  addAchievement(state, "achievement-1");
+
+  assert.throws(
+    () => addAchievement(state, "achievement-1"),
+    /already exists/
+  );
+  assert.throws(
+    () => state.updateAchievementRecord(
+      "missing",
+      achievementInput(),
+      updatedAt
+    ),
+    /does not exist/
+  );
+  assert.throws(
+    () => state.deleteAchievementRecord("missing"),
+    /does not exist/
+  );
+  assert.equal(state.getAchievementRecords().length, 1);
+});
+
+test("achievement updates reject reserved identity and timestamp fields", () => {
+  const state = createCareerState();
+  const existing = addAchievement(state, "achievement-1");
+
+  for (const field of ["id", "createdAt", "updatedAt"]) {
+    assert.throws(
+      () => state.updateAchievementRecord(
+        existing.id,
+        achievementInput({ [field]: "replacement" }),
+        updatedAt
+      ),
+      new RegExp(`cannot change ${field}`)
+    );
+    assert.deepEqual(state.getAchievementRecords(), [existing]);
+  }
+});
+
+test("validates employment links on achievement creation and update", () => {
+  const state = createCareerState();
+  const employment = addEmployment(state, "employment-1");
+  const linked = addAchievement(state, "achievement-1", achievementInput({
+    employmentId: employment.id
+  }));
+  const independent = addAchievement(state, "achievement-2");
+
+  assert.throws(
+    () => addAchievement(state, "achievement-3", achievementInput({
+      employmentId: "missing-employment"
+    })),
+    /does not exist/
+  );
+  assert.throws(
+    () => state.updateAchievementRecord(
+      linked.id,
+      achievementInput({ employmentId: "missing-employment" }),
+      updatedAt
+    ),
+    /does not exist/
+  );
+
+  assert.deepEqual(state.getAchievementRecords(), [linked, independent]);
+});
+
+test("employment deletion unlinks achievements without changing other content", () => {
+  const state = createCareerState();
+  addEmployment(state, "employment-1");
+  const retainedEmployment = addEmployment(state, "employment-2");
+  const linked = addAchievement(state, "achievement-1", achievementInput({
+    context: "Context",
+    actions: ["Action"],
+    outcome: "Outcome",
+    potentialImpact: "Potential impact",
+    metrics: [{
+      name: "Metric",
+      value: -3,
+      unit: "items",
+      period: "Year",
+      basis: "estimated"
+    }],
+    evidence: [{ nested: ["evidence", { detail: "value" }] }],
+    employmentId: "employment-1"
+  }));
+  const independent = addAchievement(state, "achievement-2");
+  const before = state.getAchievementRecords();
+
+  state.deleteEmploymentRecord("employment-1");
+
+  const after = state.getAchievementRecords();
+  const { employmentId: oldEmploymentId, ...beforeContent } = before[0];
+  const { employmentId: newEmploymentId, ...afterContent } = after[0];
+  assert.equal(oldEmploymentId, "employment-1");
+  assert.equal(newEmploymentId, null);
+  assert.deepEqual(afterContent, beforeContent);
+  assert.deepEqual(after[1], independent);
+  assert.deepEqual(state.getEmploymentRecords(), [retainedEmployment]);
+  assert.equal(linked.employmentId, "employment-1");
+});
+
+test("invalid achievement input and timestamps leave state unchanged", () => {
+  const state = createCareerState();
+  const existing = addAchievement(state, "achievement-1");
+
+  for (const invalidInput of [
+    { title: " ", contribution: "Changed" },
+    { title: "Changed", contribution: "" }
+  ]) {
+    assert.throws(
+      () => state.updateAchievementRecord(existing.id, invalidInput, updatedAt),
+      (error) => error instanceof TypeError
+        && error.errors.some(({ field }) => field === (invalidInput.title === " " ? "title" : "contribution"))
+    );
+    assert.deepEqual(state.getAchievementRecords(), [existing]);
+  }
+
+  for (const invalidUpdatedAt of ["not-a-timestamp", "2025-04-20T14:29:59.999Z"]) {
+    assert.throws(
+      () => state.updateAchievementRecord(
+        existing.id,
+        achievementInput({ title: "Changed" }),
+        invalidUpdatedAt
+      ),
+      (error) => error instanceof TypeError
+        && error.errors.some(({ field }) => field === "updatedAt")
+    );
+    assert.deepEqual(state.getAchievementRecords(), [existing]);
+  }
+});
+
+test("returned achievement data cannot mutate nested internal state", () => {
+  const state = createCareerState();
+  const input = achievementInput({
+    actions: ["Action"],
+    metrics: [{
+      name: "Metric",
+      value: 1,
+      unit: "items",
+      basis: "measured"
+    }],
+    evidence: [{
+      sources: ["report", { details: [{ note: "original" }] }]
+    }]
+  });
+  const created = addAchievement(state, "achievement-1", input);
+
+  created.title = "Changed return value";
+  created.actions.push("Changed action");
+  created.metrics[0].name = "Changed metric";
+  created.evidence[0].sources[1].details[0].note = "Changed evidence";
+
+  const records = state.getAchievementRecords();
+  records.push({});
+  records[0].actions[0] = "Changed getter";
+  records[0].metrics[0].value = 99;
+  records[0].evidence[0].sources[1].details.push({ note: "Injected" });
+
+  const returnedAfterUpdate = state.updateAchievementRecord(
+    "achievement-1",
+    achievementInput({
+      actions: ["Updated action"],
+      metrics: [{
+        name: "Updated metric",
+        value: 2,
+        unit: "items",
+        basis: "measured"
+      }],
+      evidence: [{
+        sources: ["updated", { details: [{ note: "updated evidence" }] }]
+      }]
+    }),
+    updatedAt
+  );
+  returnedAfterUpdate.metrics[0].name = "Mutated updated result";
+  returnedAfterUpdate.evidence[0].sources[1].details[0].note = "Mutated updated result";
+
+  assert.deepEqual(state.getAchievementRecords(), [{
+    id: "achievement-1",
+    ...achievementInput({
+      actions: ["Updated action"],
+      metrics: [{
+        name: "Updated metric",
+        value: 2,
+        unit: "items",
+        basis: "measured"
+      }],
+      evidence: [{
+        sources: ["updated", { details: [{ note: "updated evidence" }] }]
+      }]
+    }),
+    createdAt,
+    updatedAt
+  }]);
 });
 
 test("rejects invalid profile data without changing existing state", () => {
@@ -289,20 +573,49 @@ test("uses IDs and timestamps supplied by the caller", () => {
     createdAt
   });
   const employment = addEmployment(state, "provided-employment-id", employmentInput(), createdAt);
+  const achievement = addAchievement(
+    state,
+    "provided-achievement-id",
+    achievementInput(),
+    createdAt
+  );
   const updatedProfile = state.updateProfile(profileInput(), updatedAt);
   const updatedEmployment = state.updateEmploymentRecord(
     employment.id,
     employmentInput(),
     updatedAt
   );
+  const updatedAchievement = state.updateAchievementRecord(
+    achievement.id,
+    achievementInput(),
+    updatedAt
+  );
 
   assert.deepEqual(
-    [profile.id, profile.createdAt, employment.id, employment.createdAt],
-    ["provided-profile-id", createdAt, "provided-employment-id", createdAt]
+    [
+      profile.id,
+      profile.createdAt,
+      employment.id,
+      employment.createdAt,
+      achievement.id,
+      achievement.createdAt
+    ],
+    [
+      "provided-profile-id",
+      createdAt,
+      "provided-employment-id",
+      createdAt,
+      "provided-achievement-id",
+      createdAt
+    ]
   );
   assert.deepEqual(
-    [updatedProfile.updatedAt, updatedEmployment.updatedAt],
-    [updatedAt, updatedAt]
+    [
+      updatedProfile.updatedAt,
+      updatedEmployment.updatedAt,
+      updatedAchievement.updatedAt
+    ],
+    [updatedAt, updatedAt, updatedAt]
   );
 });
 
@@ -334,11 +647,25 @@ test("does not read the clock or generate IDs", () => {
       createdAt
     });
     const employment = addEmployment(state, "provided-employment-id");
+    const achievement = addAchievement(
+      state,
+      "provided-achievement-id",
+      achievementInput(),
+      createdAt
+    );
+    const updatedAchievement = state.updateAchievementRecord(
+      achievement.id,
+      achievementInput(),
+      updatedAt
+    );
 
     assert.equal(profile.id, "provided-profile-id");
     assert.equal(profile.createdAt, createdAt);
     assert.equal(employment.id, "provided-employment-id");
     assert.equal(employment.createdAt, createdAt);
+    assert.equal(achievement.id, "provided-achievement-id");
+    assert.equal(achievement.createdAt, createdAt);
+    assert.equal(updatedAchievement.updatedAt, updatedAt);
   } finally {
     globalThis.Date = OriginalDate;
     Math.random = originalRandom;
