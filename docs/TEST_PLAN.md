@@ -153,7 +153,8 @@ For M6, compare generated output against known evidence and documented expected 
     `employmentId: null`.
   - Compare each affected achievement before and after employment deletion;
     every field and value remains unchanged except `employmentId`, which is
-    set to `null`.
+    set to `null`. Under CP-013, a linked `verified` achievement also resets
+    to `unverified` while preserving its timestamps and other content.
   - Confirm achievement content and unrelated employment and achievement
     records remain unchanged by updates or deletion.
 - Verification and approval workflows are CP-013, not CP-012. Evidence item
@@ -171,8 +172,22 @@ For M6, compare generated output against known evidence and documented expected 
     change verification status. Keep evidence items open and unvalidated.
   - Confirm a metric's `"measured"` or `"estimated"` basis does not determine
     verification status.
-  - Confirm editing verified achievement content resets the status to
-    `"unverified"` and preserves the other valid achievement data.
+  - Confirm content updates compare normalized editable content, excluding
+    `id`, `createdAt`, `updatedAt`, and `verificationStatus`; arrays are
+    order-sensitive, plain-object key ordering is insignificant, and
+    primitives use `Object.is` equality.
+  - Confirm a verified achievement resets to `"unverified"` only when
+    normalized content changes. Content changes preserve
+    `"unverified"` and `"needs_confirmation"`.
+  - Confirm an unchanged content save preserves verification status while
+    applying the caller-supplied `updatedAt`; changed-content saves also use
+    the caller-supplied timestamp.
+  - Confirm deliberate status changes use an operation separate from content
+    updates and apply the caller-supplied timestamp. Invalid statuses and
+    unknown IDs must leave state unchanged.
+  - Confirm employment deletion unlinks associated achievements and resets
+    linked `"verified"` achievements to `"unverified"` while preserving
+    `createdAt`, `updatedAt`, and all other content.
   - Confirm reading or rendering an achievement does not change its status.
   - Confirm verification remains separate from approval. CP-013 does not
     introduce or modify draft approval behavior. Future draft approval

@@ -215,12 +215,32 @@ separate decision.
 achievement as a whole has been reviewed without treating evidence presence,
 metric basis, or draft approval as verification.
 
+**Approved implementation details:**
+
+- Content updates compare normalized editable achievement content, excluding
+  `id`, `createdAt`, `updatedAt`, and `verificationStatus`. Arrays are
+  order-sensitive, plain-object key ordering is insignificant, and primitive
+  values are compared using `Object.is`. The comparison does not prescribe a
+  particular serialization or implementation technique.
+- A content update resets `verified` to `unverified` only when normalized
+  content changes. Unchanged content preserves verification status, and
+  content changes preserve `unverified` and `needs_confirmation`. Every
+  successful content save uses the caller-supplied `updatedAt`, including an
+  unchanged save.
+- Deliberate verification changes use a separate state operation from content
+  updates. The caller supplies the timestamp, which updates `updatedAt`.
+  Invalid statuses and unknown IDs do not mutate state.
+- Deleting employment automatically unlinks associated achievements. A linked
+  achievement with `verified` status becomes `unverified`; its `createdAt`,
+  `updatedAt`, and all other achievement content are preserved, maintaining
+  the CP-012 employment-deletion behavior.
+
 **Consequences:**
 
 - Achievement status is initialized and changed deliberately; it is not
   inferred from evidence or metric basis.
-- Content edits invalidate a verified status, while reading or rendering an
-  achievement does not change it.
+- Changed content invalidates a verified status, while unchanged saves,
+  reading, or rendering an achievement do not change its verification status.
 - CP-013 adds no verification-history requirement, drafting-warning behavior,
   or fit-scoring rule.
 

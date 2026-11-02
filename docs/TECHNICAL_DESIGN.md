@@ -247,14 +247,27 @@ approval remains a separate concept.
   unlinked. The model validates the basic field type/format. The state layer
   checks that a non-null value refers to an existing employment record during
   creation or update. Multiple achievements may link to the same employment
-  record. Recovery behavior for an already-stale link remains open.
+  record. Deleting employment unlinks associated achievements. A linked
+  verified achievement becomes `unverified`; its `createdAt`, `updatedAt`, and
+  all other content remain unchanged, preserving the CP-012 deletion behavior.
+  Recovery behavior for an already-stale link remains open.
 - `verificationStatus` applies to the achievement as a whole and accepts only
   `"unverified"`, `"needs_confirmation"`, or `"verified"`. New achievements
   default to `"unverified"`. A user deliberately changes the status; evidence
   is optional and its presence does not automatically verify the achievement.
-  The metric `basis` is independent of verification. Editing verified
-  achievement content resets the status to `"unverified"`; reading or
-  rendering does not change it. Verification history is not required.
+  The metric `basis` is independent of verification. Deliberate status changes
+  use a separate state operation from content updates and apply a caller-
+  supplied `updatedAt`; invalid statuses or unknown IDs do not mutate state.
+  Content updates compare normalized editable achievement content, excluding
+  `id`, `createdAt`, `updatedAt`, and `verificationStatus`. Arrays are
+  order-sensitive, plain-object key ordering is insignificant, and primitive
+  values are compared using `Object.is`; no particular serialization
+  implementation is prescribed. If normalized content changes, a previously
+  `verified` achievement resets to `"unverified"`, while `unverified` and
+  `needs_confirmation` remain unchanged. An unchanged content save preserves
+  verification status. Every successful content save applies the
+  caller-supplied `updatedAt`, whether or not content changed. Reading or
+  rendering does not change status. Verification history is not required.
 - `createdAt` and `updatedAt` use CP-010's strict
   `YYYY-MM-DDTHH:mm:ss.sssZ` ISO UTC format. The application supplies IDs and
   timestamps, and `updatedAt` must not precede `createdAt`.
