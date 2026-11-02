@@ -161,12 +161,33 @@ For M6, compare generated output against known evidence and documented expected 
 
 ### CP-013 — Verification
 
-- Mark a claim unverified.
-- Mark a claim as needing confirmation.
-- Verify a claim through the defined workflow.
-- Confirm generated content does not automatically change verification status.
-- Confirm approval is distinct from verification.
-- Confirm warnings appear in relevant drafting workflows.
+- Model and state tests:
+  - Confirm a new achievement defaults to `verificationStatus: "unverified"`.
+  - Accept only `"unverified"`, `"needs_confirmation"`, and `"verified"`;
+    reject invalid status values and types without changing state.
+  - Confirm the user-controlled status update can set each supported status;
+    status is not inferred automatically.
+  - Confirm evidence is optional and evidence presence or absence does not
+    change verification status. Keep evidence items open and unvalidated.
+  - Confirm a metric's `"measured"` or `"estimated"` basis does not determine
+    verification status.
+  - Confirm editing verified achievement content resets the status to
+    `"unverified"` and preserves the other valid achievement data.
+  - Confirm reading or rendering an achievement does not change its status.
+  - Confirm verification remains separate from approval. CP-013 does not
+    introduce or modify draft approval behavior. Future draft approval
+    workflows must not implicitly change achievement verification status.
+  - Confirm existing achievement create, read, update, delete, employment-link,
+    and employment-deletion-unlink behavior continues to pass.
+  - Confirm invalid updates leave the achievement unchanged.
+- Manual UI checks:
+  - Verify the status applies to the achievement as a whole and the meanings
+    of all three statuses are understandable without relying on color.
+  - Deliberately change status, then edit verified content and confirm it
+    returns to `unverified`; merely opening or viewing the achievement leaves
+    the status unchanged.
+- Drafting warnings for unsupported claims are deferred to CP-030/CP-034.
+  Job-fit scoring treatment of unverified achievements is deferred to CP-023.
 
 ### CP-014 — Persistence and recovery
 

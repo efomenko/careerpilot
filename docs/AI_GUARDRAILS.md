@@ -27,9 +27,11 @@ An AI response is not evidence that its own claims are true.
 
 ### Verified
 
-The user has reviewed the claim and confirmed it against appropriate evidence.
+For CP-013, the user has deliberately reviewed and confirmed the achievement
+as a whole. Evidence is optional.
 
-Verified status should be assigned deliberately, not automatically by an AI model.
+Verified status is assigned only through deliberate user action. AI must not
+automatically mark an achievement verified or change its verification status.
 
 ### Needs confirmation
 
@@ -116,6 +118,8 @@ The intended future AI workflow is:
 10. Require the user to edit or approve the draft.
 
 If the evidence is insufficient, the system should ask a clarifying question or return a partial draft.
+This workflow must not assign or change an achievement's verification status;
+only the user's deliberate action can do so.
 
 ## 9. Job-Description Extraction
 

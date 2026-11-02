@@ -193,10 +193,10 @@ require all user-provided fields and reject unknown fields rather than silently
 dropping them. Invalid calendar dates, invalid UTC timestamps, and inconsistent
 employment dates are rejected. Validation does not mutate its input.
 Verification and approval fields are intentionally outside these CP-010
-records; verification is addressed by CP-013, and approval remains a separate
-concept.
+records. CP-013 verification status applies to the CP-012 Achievement record;
+approval remains a separate concept.
 
-### Achievement record (CP-012 contract)
+### Achievement record (CP-012 contract, extended by CP-013)
 
 ```js
 {
@@ -217,6 +217,7 @@ concept.
   ],
   evidence: [],
   employmentId: null,
+  verificationStatus: "unverified",
   createdAt: "2025-04-20T14:30:00.000Z",
   updatedAt: "2025-04-20T14:30:00.000Z"
 }
@@ -247,12 +248,22 @@ concept.
   checks that a non-null value refers to an existing employment record during
   creation or update. Multiple achievements may link to the same employment
   record. Recovery behavior for an already-stale link remains open.
+- `verificationStatus` applies to the achievement as a whole and accepts only
+  `"unverified"`, `"needs_confirmation"`, or `"verified"`. New achievements
+  default to `"unverified"`. A user deliberately changes the status; evidence
+  is optional and its presence does not automatically verify the achievement.
+  The metric `basis` is independent of verification. Editing verified
+  achievement content resets the status to `"unverified"`; reading or
+  rendering does not change it. Verification history is not required.
 - `createdAt` and `updatedAt` use CP-010's strict
   `YYYY-MM-DDTHH:mm:ss.sssZ` ISO UTC format. The application supplies IDs and
   timestamps, and `updatedAt` must not precede `createdAt`.
-- Verification and approval are distinct from evidence and are outside the
-  CP-012 record contract; verification belongs to CP-013. CP-012 adds no
-  persistence or AI workflow.
+- Verification, approval, evidence, and metric basis are separate concepts.
+  `verificationStatus` is a CP-013 extension to the CP-012 achievement
+  contract, not part of the original CP-012 scope; it does not change the
+  CP-012 evidence item contract. CP-013 does not add persistence or AI workflows.
+  Drafting warnings are deferred to CP-030/CP-034, and job-fit scoring
+  treatment is deferred to CP-023.
 
 ### Job record (conceptual; not finalized by CP-010)
 
@@ -290,7 +301,6 @@ concept.
   draftType: "cv-bullet",
   content: "",
   evidenceIds: [],
-  verificationStatus: "needs-confirmation",
   approvalStatus: "draft",
   createdAt: "",
   updatedAt: ""
@@ -313,6 +323,8 @@ concept.
 
 The non-career examples remain conceptual. Do not implement them as final
 schemas without reviewing validation, migrations, and task acceptance criteria.
+CP-013 defines verification status for achievement records only; the
+conceptual draft shape does not establish a draft verification field.
 
 ## 7. Identifiers and Relationships
 

@@ -189,6 +189,41 @@ approval, persistence, and AI workflows.
   constraints.
 - Verification and approval remain outside CP-012.
 
+### DEC-015 — Define CP-013 achievement verification
+
+**Status:** Confirmed
+
+**Decision:** Verification applies to the achievement record as a whole. The
+supported `verificationStatus` values are `"unverified"`,
+`"needs_confirmation"`, and `"verified"`. New achievements default to
+`"unverified"`. A user must deliberately confirm an achievement before it can
+be marked `"verified"`; evidence is optional. Editing the content of a
+verified achievement resets its status to `"unverified"`. Verification
+history is not required.
+
+Verification is separate from user approval, supporting evidence, and a
+metric's `"measured"` or `"estimated"` basis. CP-013 does not implement
+drafting warnings or define job-fit scoring behavior; those are deferred to
+CP-030/CP-034 and CP-023 respectively.
+
+CP-013 defines verification only for Achievement records. It does not define
+verification fields or behavior for Career Profiles or Employment History
+records; any future verification requirements for those records require a
+separate decision.
+
+**Rationale:** An explicit user-controlled status communicates whether the
+achievement as a whole has been reviewed without treating evidence presence,
+metric basis, or draft approval as verification.
+
+**Consequences:**
+
+- Achievement status is initialized and changed deliberately; it is not
+  inferred from evidence or metric basis.
+- Content edits invalidate a verified status, while reading or rendering an
+  achievement does not change it.
+- CP-013 adds no verification-history requirement, drafting-warning behavior,
+  or fit-scoring rule.
+
 ### DEC-008 — Use transparent deterministic job-fit scoring
 
 **Status:** Confirmed in principle; formula open

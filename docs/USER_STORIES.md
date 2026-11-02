@@ -79,16 +79,28 @@ Acceptance criteria:
   structure remains open.
 - Proposed and achieved outcomes are distinguishable.
 
-### CP-013 — Verification status and warnings
+### CP-013 — Achievement verification status
 
-**Story:** As a job seeker, I want to know which career claims are verified or need confirmation so that I do not use unsupported information unknowingly.
+**Story:** As a job seeker, I want to set and see the verification status of
+an achievement so that I know whether I have deliberately reviewed and
+confirmed it.
 
 Acceptance criteria:
 
-- Verification status can be assigned and updated.
-- Unverified claims are clearly identified.
-- Drafting workflows can warn about unsupported claims.
-- Approval is not treated as equivalent to verification.
+- Verification applies to the achievement record as a whole.
+- Supported statuses are `unverified`, `needs_confirmation`, and `verified`.
+- A new achievement defaults to `unverified`.
+- The user deliberately changes an achievement's verification status;
+  verification is not inferred automatically.
+- Evidence is optional and its presence does not automatically verify an
+  achievement.
+- A metric's `measured` or `estimated` basis is independent of verification.
+- Editing verified achievement content resets its status to `unverified`;
+  reading or rendering it does not change its status.
+- Verification history is not required.
+- Verification and approval remain distinct.
+- Drafting warnings are deferred to CP-030/CP-034, and job-fit scoring
+  treatment is deferred to CP-023.
 
 ### CP-014 — Persistence and recovery
 

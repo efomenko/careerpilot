@@ -131,19 +131,26 @@ Acceptance criteria:
 
 ### FR-05 — Verification and approval
 
-Explicit verification information is a CP-013 requirement, not a prerequisite
-for creating a CP-012 achievement. Verification and user approval are distinct
-from supporting evidence and from each other.
+CP-013 adds user-controlled verification status to the achievement record as
+a whole. Verification is not a prerequisite for creating an achievement.
+Verification, user approval, supporting evidence, and a metric's measured or
+estimated basis are separate concepts.
 
 Acceptance criteria:
 
-- Claims can be marked unverified, needs confirmation, or verified.
-- The interface explains what the statuses mean.
-- Supporting evidence can be associated with claims. The evidence item
-  structure remains open; this requirement does not specify evidence formats,
-  uploads, or storage integrations.
-- A claim cannot be treated as verified solely because generated text sounds plausible.
-- User approval is recorded separately from evidence verification.
+- An achievement has one verification status: `unverified`,
+  `needs_confirmation`, or `verified`.
+- A new achievement defaults to `unverified`.
+- The interface explains that `unverified` is the initial state,
+  `needs_confirmation` means the user has identified it for further review,
+  and `verified` means the user deliberately reviewed and confirmed the
+  achievement.
+- Evidence is optional and its presence does not itself verify an achievement.
+- Editing verified achievement content resets its status to `unverified`.
+- Reading or rendering an achievement does not change its status.
+- Verification does not record history and is not equivalent to approval.
+- Drafting warnings are deferred to CP-030/CP-034; job-fit scoring treatment
+  is deferred to CP-023.
 
 ### FR-06 — Job opportunities
 
@@ -319,14 +326,22 @@ Acceptance criteria:
 
 CareerPilot must distinguish:
 
-- **Verified:** the user has reviewed the claim and confirmed it against appropriate evidence.
-- **Needs confirmation:** the claim may be accurate but needs review.
-- **Unverified:** there is insufficient confirmation.
+- **Verified:** for an achievement, the user has deliberately reviewed and
+  confirmed the achievement as a whole.
+- **Needs confirmation:** for an achievement, the user has identified it for
+  further review.
+- **Unverified:** the default achievement status before deliberate user
+  confirmation, or after verified achievement content is edited.
 - **Unsupported:** available records do not support the claim.
 - **Proposed:** suggested content that has not been approved.
 - **Approved:** content explicitly accepted by the user for the relevant use.
 
-These statuses are not interchangeable. User approval does not automatically prove a claim's accuracy.
+Only `unverified`, `needs_confirmation`, and `verified` are CP-013 achievement
+verification statuses. Unsupported is a separate support classification;
+proposed and approved describe content/approval, not achievement verification.
+These concepts are not interchangeable. User approval does not automatically
+prove a claim's accuracy, and supporting evidence or a measured metric does not
+automatically verify an achievement.
 
 ## 8. MVP Acceptance Criteria
 
