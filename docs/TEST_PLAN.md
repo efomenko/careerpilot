@@ -206,13 +206,35 @@ For M6, compare generated output against known evidence and documented expected 
 
 ### CP-014 — Persistence and recovery
 
-- Save data and reload the application.
-- Confirm records persist according to the chosen storage mechanism.
-- Test empty storage.
-- Test malformed stored data.
-- Test a storage failure where feasible.
-- Confirm the user receives feedback.
-- Test recovery behavior and document limitations.
+- With an empty storage key, start with an empty in-memory Career Knowledge
+  Base and verify the version-1 envelope is written after the first successful
+  mutation.
+- Restore a valid version-1 envelope and confirm the profile, employment
+  records, and achievement records are available before the application
+  renders.
+- Validate the envelope structure and version, complete profile/employment/
+  achievement records, duplicate IDs, and employment relationships. Reject
+  invalid snapshots without partially restoring or normalizing records.
+- Confirm each successful profile, employment, and achievement mutation saves
+  the complete snapshot, including verification-status changes and employment
+  deletion updates to linked achievements.
+- Reload after saving and confirm the profile, employment records,
+  achievements, relationships, and verification statuses persist.
+- For invalid JSON, malformed envelopes, invalid records, and unsupported
+  versions, verify the original stored value is preserved, the in-memory state
+  starts empty, no partial restore occurs, and writes to that key remain
+  disabled for the session.
+- Confirm failed restoration produces a persistent, understandable warning
+  that existing data could not be restored and current changes will not be
+  persisted.
+- Confirm evidence values that cannot be faithfully represented by JSON are
+  rejected at the persistence boundary without modifying in-memory evidence.
+- Simulate unavailable storage and failed writes. Verify successful in-memory
+  mutations remain usable, the user is told changes were not persisted, no
+  persistence-success feedback is shown, and the previous stored value is not
+  deleted before the write attempt.
+- Keep CP-043/CP-044 import/export scenarios separate; import/export is not
+  implemented by CP-014.
 
 ## 6. M3 — Jobs & Evidence-Based Fit
 

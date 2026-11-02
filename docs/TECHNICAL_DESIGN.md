@@ -55,7 +55,7 @@ Additional JavaScript modules and test directories may be introduced as the impl
 | Application logic | Vanilla JavaScript |
 | Navigation | Client-side view switching |
 | Initial routing | URL hash, if retained from the shell implementation |
-| Initial persistence | To be confirmed; browser storage is a candidate |
+| Initial persistence | CP-014 target: browser `localStorage` with one version-1 JSON envelope |
 | Data interchange | Versioned JSON |
 | Testing | Start with manual checks; introduce automated tests for critical logic |
 | AI | Deferred until the manual workflow is stable |
@@ -91,8 +91,10 @@ the corresponding model constructors and validators, accepts IDs and
 timestamps from its caller, and returns copies so callers cannot mutate its
 internal state. The existing Achievements view and shared `careerState`
 instance are used; a separate achievement state manager is not introduced.
-The state module is independent of the DOM and browser storage; persistence is
-not provided.
+The state module is independent of the DOM and browser storage. The current
+implementation keeps state in memory; CP-014's approved target adds persistence
+outside the domain models, restoring and validating the complete snapshot
+before rendering and saving after successful state mutations.
 
 ### 5.3 Domain logic
 
@@ -118,7 +120,10 @@ Responsibilities:
 - Version stored data where appropriate.
 - Report failures without silently discarding data.
 
-The initial persistence technology is an open decision. Browser storage is a possible MVP solution, but its limitations must be explained to users.
+The approved CP-014 target uses browser `localStorage` and one versioned JSON
+envelope. Persistence remains separate from the model and state contracts; the
+current implementation status must be checked before describing it as
+available. Storage limitations and failures must be explained to users.
 
 ## 6. Career Data Model
 
@@ -396,17 +401,43 @@ Validation errors should explain what needs to be corrected. Avoid silently coer
 
 ## 10. Persistence and Data Recovery
 
-Before implementation, decide:
+The approved CP-014 target uses browser `localStorage` with one JSON envelope:
 
-- Which storage mechanism to use.
-- How records are serialized.
-- How schema versions are represented.
-- How corrupted data is detected.
-- Whether automatic recovery is possible.
-- How export and import interact with existing data.
-- What data is lost when browser storage is cleared.
+```js
+{
+  version: 1,
+  profile: null,
+  employmentRecords: [],
+  achievementRecords: []
+}
+```
 
-If local browser storage is selected, users must be informed that it is not equivalent to a secure, synchronized cloud backup.
+The current application state is in memory; this section describes the
+approved CP-014 target, not a claim that persistence has been implemented. The
+complete snapshot must be restored and validated before application rendering,
+and the complete Career Knowledge Base must be saved after each successful
+state mutation. Validation covers JSON parsing, envelope structure and
+version, complete records, duplicate IDs, and employment relationships.
+Invalid data must never be partially restored, silently discarded, normalized,
+or used to overwrite the original stored value.
+
+If JSON is invalid, the envelope or records are invalid, or the version is
+unsupported, retain the original value, start with an empty in-memory Career
+Knowledge Base, allow the application to remain usable during the session,
+show a persistent warning that the existing data could not be restored and
+current changes will not be persisted, and disable writes to the affected key
+for the rest of the session. Evidence that JSON cannot represent faithfully
+must be rejected at the persistence boundary without modifying in-memory
+evidence.
+
+When storage is unavailable or a write fails, successful in-memory mutations
+remain available and the user must be told that changes were not persisted.
+A failed write must not produce a persistence-success message, and the previous
+stored value must not be deleted before attempting a write.
+
+Browser storage is not a secure cloud backup, and data may be lost if browser
+data is cleared. Import/export, backend storage, cloud synchronization, and
+automatic schema migration are outside CP-014.
 
 ## 11. Job-Fit Assessment
 
@@ -473,7 +504,6 @@ See `TEST_PLAN.md` for test scenarios.
 
 ## 15. Technical Decisions Requiring Confirmation
 
-- Browser storage choice.
 - Schemas for future record types other than the Career Profile, Employment
   History, and Achievement record remain unresolved. The Achievement schema is
   finalized by DEC-014.

@@ -108,10 +108,30 @@ Acceptance criteria:
 
 Acceptance criteria:
 
-- Data persists using the selected storage mechanism.
-- Storage errors are handled and communicated.
-- Data format is versioned where needed.
-- Recovery and limitations are documented.
+- Persist the complete Career Knowledge Base in browser `localStorage` using
+  one version-1 JSON envelope with `version`, `profile`,
+  `employmentRecords`, and `achievementRecords`.
+- Restore and validate the complete snapshot before rendering; validate JSON,
+  envelope structure and version, complete records, duplicate IDs, and
+  employment relationships.
+- Save the complete snapshot after every successful state mutation while
+  preserving CP-010 through CP-013 data contracts and behavior.
+- If JSON is invalid, the envelope is malformed, records are invalid, or the
+  version is unsupported, preserve the original value, do not partially
+  restore it, start with an empty in-memory Career Knowledge Base, allow use
+  during the session, show a persistent warning that existing data could not
+  be restored and current changes will not be persisted, and disable writes
+  to that key for the session.
+- Reject evidence that cannot be faithfully represented by JSON without
+  modifying in-memory evidence.
+- If storage is unavailable or a write fails, keep successful in-memory
+  mutations, clearly report that changes were not persisted, and do not show
+  persistence-success feedback.
+- Explain that browser storage is not a secure cloud backup and data may be
+  lost if browser data is cleared.
+- Import/export, backend storage, cloud synchronization, and automatic schema
+  migration are outside CP-014; import/export behavior remains a separate
+  requirement.
 
 ## 4. M3 — Jobs & Evidence-Based Fit
 

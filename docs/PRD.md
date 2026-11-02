@@ -261,6 +261,37 @@ Acceptance criteria:
 - Import does not silently corrupt existing records.
 - Replacement or merge behavior is explicit and confirmed before destructive changes.
 
+### CP-014 — Persistence and recovery
+
+The application must persist the complete Career Knowledge Base in browser
+`localStorage` using one version-1 JSON envelope containing `version`,
+`profile`, `employmentRecords`, and `achievementRecords`. It must restore and
+validate the complete snapshot before rendering and save after each successful
+state mutation, without changing the existing CP-010 through CP-013 data
+contracts.
+
+Acceptance criteria:
+
+- Validate JSON parsing, envelope structure and version, complete records,
+  duplicate IDs, and employment relationships before restoring.
+- Never partially restore, silently discard, or normalize invalid stored
+  data. For invalid JSON, malformed envelopes, invalid records, or unsupported
+  versions, preserve the original stored value, start with an empty in-memory
+  Career Knowledge Base, allow use during the session, show a persistent
+  warning that the data could not be restored and current changes will not be
+  persisted, and disable writes to that key for the session.
+- Reject evidence values that cannot be represented faithfully by JSON at the
+  persistence boundary without modifying in-memory evidence.
+- If storage is unavailable or a write fails, retain successful in-memory
+  mutations and clearly report that changes were not persisted. Do not show
+  persistence-success feedback on a failed write or delete the previous value
+  before attempting a write.
+- Explain that browser storage is not a secure cloud backup and data may be
+  lost if browser data is cleared.
+- CP-014 does not implement import/export, backend storage, cloud
+  synchronization, or automatic schema migration. Broader import/export
+  requirements remain covered separately by FR-13/FR-14 and CP-043/CP-044.
+
 ### FR-15 — AI-assisted features
 
 AI features are introduced only after the manual workflow is usable.
@@ -370,7 +401,6 @@ GitHub issues are the source of truth for task-level completion. This PRD descri
 ## 10. Open Decisions
 
 - Exact profile fields and validation rules.
-- Initial storage mechanism and recovery behavior.
 - Fit scoring weights and explanation format.
 - Import merge versus replacement strategy.
 - AI provider, budget, and privacy policy.

@@ -90,20 +90,23 @@ Do not mark a decision confirmed merely because it appears in this document.
 
 ### DEC-006 — Choose the initial persistence mechanism
 
-**Status:** Open
+**Status:** Confirmed
 
-**Problem:** Career data must persist between sessions, but the storage mechanism has not been finalized in this decision log.
+**Decision:** CP-014 uses browser `localStorage` to persist the Career Knowledge Base in one JSON envelope with version `1` and the fields `version`, `profile`, `employmentRecords`, and `achievementRecords`. The application saves the complete envelope after each successful state mutation and restores and validates the complete snapshot before rendering. Existing CP-010 through CP-013 record contracts remain unchanged.
 
-**Candidate:** Browser storage for the initial single-user MVP.
+Stored JSON, envelope structure and version, records, duplicate IDs, and employment relationships must be validated before restoration. Invalid JSON, malformed envelopes, invalid records, and unsupported versions must not be partially restored or silently overwritten. When restoration fails for one of these reasons, the original stored value is preserved and writes to that storage key are disabled for the current session.
 
-**Questions:**
+Evidence values that cannot be represented faithfully by JSON are rejected at the persistence boundary without changing in-memory evidence. If storage is unavailable or a write fails, the application remains usable in memory and clearly communicates that changes are not persisted. A write must not delete the previous stored value before attempting to save.
 
-- Which browser storage mechanism best fits the expected data size and complexity?
-- How will malformed or outdated data be handled?
-- What happens when users clear browser data?
-- What backup and recovery instructions are required?
+**Rationale:** A single versioned browser-storage envelope provides local persistence for the current career records while keeping validation and recovery explicit and avoiding silent data loss.
 
-**Next step:** Decide during CP-014 after considering export/import requirements.
+**Consequences:**
+
+- Persistence is a separate application responsibility; existing record models and CP-010 through CP-013 behavior remain authoritative.
+- Restoration must complete successfully before application views render from restored state.
+- Persistence failures must be clearly reported, and invalid or unsupported stored data must not be overwritten automatically.
+- Browser storage is not a secure cloud backup, and data may be lost if browser data is cleared.
+- Import/export and schema migration remain separate scope.
 
 ### DEC-007 — Define the final domain schemas
 
