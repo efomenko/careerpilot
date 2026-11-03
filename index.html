@@ -86,6 +86,18 @@
       </header>
 
       <main id="main-content" class="main-content" tabindex="-1">
+        <div
+          class="persistence-status"
+          id="persistence-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          hidden
+        >
+          <p class="persistence-status__message" id="persistence-persistent-warning" hidden></p>
+          <p class="persistence-status__message" id="persistence-transient-warning" hidden></p>
+        </div>
+
         <section
           class="dashboard-view"
           data-page-view="dashboard"
@@ -189,8 +201,8 @@
               Capture the professional details you want to keep together.
             </p>
             <p class="profile-memory-note">
-              Your profile is held in memory for this session only and will be
-              lost when you reload this page.
+              Changes are saved in this browser when storage is available.
+              Storage warnings will indicate when a change could not be saved.
             </p>
 
             <form class="profile-form" id="profile-form" novalidate>
@@ -254,7 +266,7 @@
               <div>
                 <p class="eyebrow">YOUR EXPERIENCE</p>
                 <h2 id="employment-title" tabindex="-1">Employment History</h2>
-                <p class="employment-description">Add roles to keep your work history organized for this session.</p>
+                <p class="employment-description">Add roles to keep your work history organized.</p>
               </div>
             </div>
 
@@ -375,8 +387,8 @@
               confirmed it. Evidence and metric basis do not set verification.
             </p>
             <p class="achievement-memory-note">
-              Achievement data is held in memory for this session only and will
-              be lost when you reload this page.
+              Changes are saved in this browser when storage is available.
+              Storage warnings will indicate when a change could not be saved.
             </p>
 
             <div

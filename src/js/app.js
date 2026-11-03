@@ -1,10 +1,49 @@
 
-import { createCareerState } from "./career-state.js";
+import { createCareerPersistence } from "./career-persistence.js";
 import { clearFeedback, clearFieldError, showFeedback, showFieldError } from "./feedback.js";
 import { validateRequired } from "./validation.js";
 
-const careerState = createCareerState();
 const appStatus = document.querySelector("#app-status");
+const persistenceStatus = document.querySelector("#persistence-status");
+const persistentWarning = document.querySelector("#persistence-persistent-warning");
+const transientWarning = document.querySelector("#persistence-transient-warning");
+
+function renderPersistenceStatus(status) {
+  persistentWarning.textContent = status.persistentWarning
+    ? `Storage warning: ${status.persistentWarning.message}`
+    : "";
+  persistentWarning.hidden = !status.persistentWarning;
+  transientWarning.textContent = status.transientWarning
+    ? `Saving warning: ${status.transientWarning.message}`
+    : "";
+  transientWarning.hidden = !status.transientWarning;
+  persistenceStatus.hidden = !status.persistentWarning && !status.transientWarning;
+}
+
+function logPersistenceError(error) {
+  try {
+    console.error("CareerPilot persistence error.", error);
+  } catch {
+    return;
+  }
+}
+
+const browserStorage = {
+  getItem(key) {
+    return globalThis.localStorage.getItem(key);
+  },
+  setItem(key, value) {
+    globalThis.localStorage.setItem(key, value);
+  }
+};
+
+const careerPersistence = createCareerPersistence(browserStorage, {
+  onStatusChange: renderPersistenceStatus,
+  onUnexpectedError: logPersistenceError
+});
+const careerState = careerPersistence.state;
+renderPersistenceStatus(careerPersistence.getStatus());
+
 const sidebar = document.querySelector("#sidebar");
 const menuToggle = document.querySelector("#menu-toggle");
 const currentSection = document.querySelector("#current-section");
@@ -221,7 +260,7 @@ function saveProfile(event) {
     showFeedback(
       profileFeedback,
       "success",
-      "Profile saved for this session. It will be lost when you reload the page."
+      existingProfile ? "Profile updated." : "Profile created."
     );
   } catch (error) {
     if (Array.isArray(error.errors)) {
@@ -416,13 +455,13 @@ function saveEmploymentRecord(event) {
         input,
         new Date().toISOString()
       );
-      showFeedback(employmentFeedback, "success", "Employment record updated for this session.");
+      showFeedback(employmentFeedback, "success", "Employment record updated.");
     } else {
       careerState.addEmploymentRecord(input, {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       });
-      showFeedback(employmentFeedback, "success", "Employment record added for this session.");
+      showFeedback(employmentFeedback, "success", "Employment record added.");
     }
 
     resetEmploymentForm();
@@ -451,7 +490,7 @@ function deleteEmploymentRecord(record) {
     if (editingEmploymentId === record.id) {
       resetEmploymentForm();
     }
-    showFeedback(employmentFeedback, "success", "Employment record deleted from this session.");
+    showFeedback(employmentFeedback, "success", "Employment record deleted.");
     document.querySelector("#employment-title").focus();
   } catch (error) {
     showFeedback(
@@ -1007,13 +1046,13 @@ function saveAchievementRecord(event) {
       successMessage = existingRecord.verificationStatus === "verified"
         && updatedRecord.verificationStatus === "unverified"
         ? "Achievement content changed. Verification was reset to Unverified."
-        : "Achievement updated for this session.";
+        : "Achievement updated.";
     } else {
       careerState.addAchievementRecord(input, {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       });
-      successMessage = "Achievement added for this session.";
+      successMessage = "Achievement added.";
     }
 
     resetAchievementForm();
@@ -1041,7 +1080,7 @@ function deleteAchievementRecord(record) {
       resetAchievementForm();
     }
     renderAchievementRecords();
-    showFeedback(achievementFeedback, "success", "Achievement deleted from this session.");
+    showFeedback(achievementFeedback, "success", "Achievement deleted.");
     document.querySelector("#achievements-title").focus();
   } catch (error) {
     showFeedback(

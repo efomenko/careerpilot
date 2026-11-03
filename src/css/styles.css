@@ -489,6 +489,28 @@ a:focus-visible {
   font-size: 11px;
 }
 
+.persistence-status {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.persistence-status__message {
+  min-width: 0;
+  margin: 0;
+  padding: 12px 14px;
+  color: #71320d;
+  background: #fff7ed;
+  border: 1px solid #c2410c;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .app-footer {
   display: flex;
   justify-content: space-between;
@@ -1541,6 +1563,14 @@ a:focus-visible {
 
   .main-content {
     padding: 22px 16px;
+  }
+
+  .persistence-status {
+    width: 100%;
+  }
+
+  .persistence-status__message {
+    padding: 11px 12px;
   }
 
   .welcome-section {

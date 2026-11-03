@@ -63,6 +63,273 @@ function copyAchievementRecord(record) {
   return copyNestedData(record);
 }
 
+function copySnapshotValue(value, copies = new WeakMap(), path = "snapshot") {
+  if (
+    value === null
+    || typeof value === "undefined"
+    || typeof value === "string"
+    || typeof value === "number"
+    || typeof value === "boolean"
+    || typeof value === "bigint"
+    || typeof value === "symbol"
+  ) {
+    return value;
+  }
+
+  if (typeof value === "function") {
+    throw new TypeError(`${path} contains a function that cannot be safely copied.`);
+  }
+
+  if (copies.has(value)) {
+    return copies.get(value);
+  }
+
+  let isArray;
+  let prototype;
+  let keys;
+  try {
+    isArray = Array.isArray(value);
+    prototype = Object.getPrototypeOf(value);
+    keys = Reflect.ownKeys(value);
+  } catch {
+    throw new TypeError(`${path} could not be inspected safely.`);
+  }
+
+  if (isArray) {
+    if (prototype !== Array.prototype) {
+      throw new TypeError(`${path} contains an array with an unsupported prototype.`);
+    }
+
+    let length;
+    try {
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      length = lengthDescriptor?.value;
+    } catch {
+      throw new TypeError(`${path} array length could not be inspected safely.`);
+    }
+    if (!Number.isSafeInteger(length) || length < 0) {
+      throw new TypeError(`${path} has an invalid array length.`);
+    }
+
+    const copy = new Array(length);
+    copies.set(value, copy);
+    for (const key of keys) {
+      if (key === "length") {
+        continue;
+      }
+      if (typeof key !== "string" || !/^(0|[1-9]\d*)$/.test(key)) {
+        throw new TypeError(`${path} contains an unsupported array property.`);
+      }
+
+      let descriptor;
+      try {
+        descriptor = Object.getOwnPropertyDescriptor(value, key);
+      } catch {
+        throw new TypeError(`${path}[${key}] could not be inspected safely.`);
+      }
+      const index = Number(key);
+      if (!Number.isSafeInteger(index) || index >= length) {
+        throw new TypeError(`${path} contains an unsupported array property.`);
+      }
+      if (!descriptor?.enumerable || !("value" in descriptor)) {
+        throw new TypeError(`${path}[${key}] must be an enumerable data property.`);
+      }
+      Object.defineProperty(copy, key, {
+        ...descriptor,
+        value: copySnapshotValue(descriptor.value, copies, `${path}[${key}]`)
+      });
+    }
+    let lengthDescriptor;
+    try {
+      lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    } catch {
+      throw new TypeError(`${path} array length could not be inspected safely.`);
+    }
+    Object.defineProperty(copy, "length", lengthDescriptor);
+    return copy;
+  }
+
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`${path} contains an object with an unsupported prototype.`);
+  }
+
+  const copy = Object.create(prototype);
+  copies.set(value, copy);
+  for (const key of keys) {
+    if (typeof key !== "string") {
+      throw new TypeError(`${path} contains an unsupported symbol-keyed property.`);
+    }
+    let descriptor;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(value, key);
+    } catch {
+      throw new TypeError(`${path}.${key} could not be inspected safely.`);
+    }
+    if (!descriptor?.enumerable || !("value" in descriptor)) {
+      throw new TypeError(`${path}.${key} must be an enumerable data property.`);
+    }
+    Object.defineProperty(copy, key, {
+      ...descriptor,
+      value: copySnapshotValue(descriptor.value, copies, `${path}.${key}`)
+    });
+  }
+  return copy;
+}
+
+function prepareSnapshotCopy(snapshot) {
+  let prototype;
+  let keys;
+  let isArray;
+  try {
+    isArray = Array.isArray(snapshot);
+    prototype = Object.getPrototypeOf(snapshot);
+    keys = Reflect.ownKeys(snapshot);
+  } catch {
+    throw new TypeError("Snapshot could not be inspected safely.");
+  }
+
+  if (
+    snapshot === null
+    || typeof snapshot !== "object"
+    || isArray
+    || (prototype !== Object.prototype && prototype !== null)
+  ) {
+    throw new TypeError("Snapshot must be a plain object.");
+  }
+
+  const expectedFields = ["profile", "employmentRecords", "achievementRecords"];
+  for (const key of keys) {
+    if (typeof key !== "string" || !expectedFields.includes(key)) {
+      throw new TypeError(`Snapshot contains unexpected property "${String(key)}".`);
+    }
+  }
+  for (const field of expectedFields) {
+    let descriptor;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(snapshot, field);
+    } catch {
+      throw new TypeError(`Snapshot property "${field}" could not be inspected safely.`);
+    }
+    if (!descriptor) {
+      throw new TypeError(`Snapshot is missing required property "${field}".`);
+    }
+    if (!descriptor.enumerable || !("value" in descriptor)) {
+      throw new TypeError(`Snapshot property "${field}" must be an enumerable data property.`);
+    }
+  }
+
+  return copySnapshotValue(snapshot);
+}
+
+function validateSnapshotRecords(snapshot) {
+  const errors = [];
+  if (snapshot.profile !== null) {
+    const result = validateCareerProfile(snapshot.profile);
+    if (!result.valid) {
+      errors.push(...result.errors.map((error) => ({
+        ...error,
+        recordType: "profile",
+        recordId: snapshot.profile?.id
+      })));
+    }
+  }
+
+  if (!Array.isArray(snapshot.employmentRecords)) {
+    errors.push({
+      field: "employmentRecords",
+      message: "Employment records must be an array.",
+      recordType: "employment"
+    });
+  } else {
+    const employmentIds = new Set();
+    snapshot.employmentRecords.forEach((record, index) => {
+      const result = validateEmploymentRecord(record);
+      if (!result.valid) {
+        errors.push(...result.errors.map((error) => ({
+          ...error,
+          field: `employmentRecords[${index}].${error.field}`,
+          recordType: "employment",
+          recordId: record?.id
+        })));
+      }
+      if (record && typeof record.id === "string") {
+        if (employmentIds.has(record.id)) {
+          errors.push({
+            field: `employmentRecords[${index}].id`,
+            message: `Duplicate Employment History ID "${record.id}".`,
+            recordType: "employment",
+            recordId: record.id
+          });
+        } else {
+          employmentIds.add(record.id);
+        }
+      }
+    });
+  }
+
+  if (!Array.isArray(snapshot.achievementRecords)) {
+    errors.push({
+      field: "achievementRecords",
+      message: "Achievement records must be an array.",
+      recordType: "achievement"
+    });
+  } else {
+    const achievementIds = new Set();
+    snapshot.achievementRecords.forEach((record, index) => {
+      const result = validateAchievementRecord(record);
+      if (!result.valid) {
+        errors.push(...result.errors.map((error) => ({
+          ...error,
+          field: `achievementRecords[${index}].${error.field}`,
+          recordType: "achievement",
+          recordId: record?.id
+        })));
+      }
+      if (record && typeof record.id === "string") {
+        if (achievementIds.has(record.id)) {
+          errors.push({
+            field: `achievementRecords[${index}].id`,
+            message: `Duplicate Achievement ID "${record.id}".`,
+            recordType: "achievement",
+            recordId: record.id
+          });
+        } else {
+          achievementIds.add(record.id);
+        }
+      }
+    });
+  }
+
+  if (Array.isArray(snapshot.employmentRecords) && Array.isArray(snapshot.achievementRecords)) {
+    const employmentIds = new Set(
+      snapshot.employmentRecords
+        .filter((record) => record && typeof record.id === "string")
+        .map((record) => record.id)
+    );
+    snapshot.achievementRecords.forEach((record, index) => {
+      if (
+        record
+        && record.employmentId !== null
+        && typeof record.employmentId === "string"
+        && !employmentIds.has(record.employmentId)
+      ) {
+        errors.push({
+          field: `achievementRecords[${index}].employmentId`,
+          message: `Employment History record "${record.employmentId}" does not exist.`,
+          recordType: "achievement",
+          recordId: record.id
+        });
+      }
+    });
+  }
+
+  if (errors.length > 0) {
+    const error = new TypeError("Career snapshot is invalid.");
+    error.errors = errors;
+    throw error;
+  }
+}
+
 function isPlainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -207,10 +474,53 @@ function assertEditableInput(input, reservedFields, recordName) {
  * Invalid records throw TypeError; unknown IDs and duplicate IDs throw Error.
  * No browser APIs, persistence, clock, or ID generation are used.
  */
-export function createCareerState() {
+export function createCareerState({ onMutation, onMutationError } = {}) {
+  if (onMutation !== undefined && typeof onMutation !== "function") {
+    throw new TypeError("onMutation must be a function.");
+  }
+  if (onMutationError !== undefined && typeof onMutationError !== "function") {
+    throw new TypeError("onMutationError must be a function.");
+  }
+
   let profile = null;
-  const employmentRecords = [];
+  let employmentRecords = [];
   let achievementRecords = [];
+  let isFresh = true;
+
+  function reportMutationError(error) {
+    if (onMutationError) {
+      try {
+        onMutationError(error);
+        return;
+      } catch (handlerError) {
+        try {
+          console.error("Career state mutation error handler failed.", handlerError, error);
+        } catch {
+          // The committed mutation result must not be changed by error reporting.
+        }
+        return;
+      }
+    }
+
+    try {
+      console.error("Career state mutation notification failed.", error);
+    } catch {
+      return;
+    }
+  }
+
+  function notifyMutation() {
+    isFresh = false;
+    if (!onMutation) {
+      return;
+    }
+
+    try {
+      onMutation(() => state.getSnapshot());
+    } catch (error) {
+      reportMutationError(error);
+    }
+  }
 
   function assertEmploymentLinkExists(record) {
     if (
@@ -223,7 +533,29 @@ export function createCareerState() {
     }
   }
 
-  return {
+  const state = {
+    restoreSnapshot(snapshot) {
+      if (!isFresh) {
+        throw new Error("A Career snapshot can only be restored into a fresh state.");
+      }
+
+      const replacement = prepareSnapshotCopy(snapshot);
+      validateSnapshotRecords(replacement);
+
+      profile = replacement.profile;
+      employmentRecords = replacement.employmentRecords;
+      achievementRecords = replacement.achievementRecords;
+      isFresh = false;
+    },
+
+    getSnapshot() {
+      return prepareSnapshotCopy({
+        profile,
+        employmentRecords,
+        achievementRecords
+      });
+    },
+
     createProfile(input, metadata) {
       if (profile) {
         throw new Error("A Career Profile already exists.");
@@ -232,7 +564,9 @@ export function createCareerState() {
       const newProfile = createCareerProfile(input, metadata);
       validateRecord(newProfile, validateCareerProfile, "Career Profile");
       profile = newProfile;
-      return copyProfile(profile);
+      const result = copyProfile(profile);
+      notifyMutation();
+      return result;
     },
 
     updateProfile(input, updatedAt) {
@@ -249,7 +583,9 @@ export function createCareerState() {
       };
       validateRecord(updatedProfile, validateCareerProfile, "Career Profile");
       profile = copyProfile(updatedProfile);
-      return copyProfile(profile);
+      const result = copyProfile(profile);
+      notifyMutation();
+      return result;
     },
 
     addEmploymentRecord(input, metadata) {
@@ -261,7 +597,9 @@ export function createCareerState() {
       }
 
       employmentRecords.push(copyEmploymentRecord(newRecord));
-      return copyEmploymentRecord(newRecord);
+      const result = copyEmploymentRecord(newRecord);
+      notifyMutation();
+      return result;
     },
 
     updateEmploymentRecord(id, input, updatedAt) {
@@ -281,7 +619,9 @@ export function createCareerState() {
       };
       validateRecord(updatedRecord, validateEmploymentRecord, "Employment History record");
       employmentRecords[recordIndex] = copyEmploymentRecord(updatedRecord);
-      return copyEmploymentRecord(employmentRecords[recordIndex]);
+      const result = copyEmploymentRecord(employmentRecords[recordIndex]);
+      notifyMutation();
+      return result;
     },
 
     deleteEmploymentRecord(id) {
@@ -309,6 +649,7 @@ export function createCareerState() {
 
       employmentRecords.splice(recordIndex, 1);
       achievementRecords = updatedAchievements;
+      notifyMutation();
     },
 
     addAchievementRecord(input, metadata) {
@@ -321,7 +662,9 @@ export function createCareerState() {
 
       assertEmploymentLinkExists(newRecord);
       achievementRecords.push(copyAchievementRecord(newRecord));
-      return copyAchievementRecord(newRecord);
+      const result = copyAchievementRecord(newRecord);
+      notifyMutation();
+      return result;
     },
 
     updateAchievementRecord(id, input, updatedAt) {
@@ -351,7 +694,9 @@ export function createCareerState() {
       assertEmploymentLinkExists(updatedRecord);
 
       achievementRecords[recordIndex] = copyAchievementRecord(updatedRecord);
-      return copyAchievementRecord(achievementRecords[recordIndex]);
+      const result = copyAchievementRecord(achievementRecords[recordIndex]);
+      notifyMutation();
+      return result;
     },
 
     updateAchievementVerificationStatus(id, status, updatedAt) {
@@ -370,7 +715,9 @@ export function createCareerState() {
       validateRecord(updatedRecord, validateAchievementRecord, "Achievement record");
 
       achievementRecords[recordIndex] = copyAchievementRecord(updatedRecord);
-      return copyAchievementRecord(achievementRecords[recordIndex]);
+      const result = copyAchievementRecord(achievementRecords[recordIndex]);
+      notifyMutation();
+      return result;
     },
 
     deleteAchievementRecord(id) {
@@ -381,6 +728,7 @@ export function createCareerState() {
       }
 
       achievementRecords.splice(recordIndex, 1);
+      notifyMutation();
     },
 
     getProfile() {
@@ -395,4 +743,6 @@ export function createCareerState() {
       return achievementRecords.map(copyAchievementRecord);
     }
   };
+
+  return state;
 }
