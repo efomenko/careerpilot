@@ -63,6 +63,17 @@ const pageTitle = document.querySelector("#page-title");
 const navigationLinks = document.querySelectorAll("[data-view]");
 const pageViews = document.querySelectorAll("[data-page-view]");
 const profileForm = document.querySelector("#profile-form");
+const profileDialog = document.querySelector("#profile-dialog");
+const profileAction = document.querySelector("#profile-action");
+const profileCancel = document.querySelector("#profile-cancel");
+
+const profileEmptyState = document.querySelector("#profile-empty-state");
+const profileDetails = document.querySelector("#profile-details");
+const profileDisplayName = document.querySelector("#profile-display-name");
+const profileDisplayHeadline = document.querySelector("#profile-display-headline");
+const profileSummaryText = document.querySelector("#profile-summary-text");
+const profileSummaryToggle = document.querySelector("#profile-summary-toggle");
+const profileSkillsList = document.querySelector("#profile-skills-list");
 const profileControls = {
   fullName: document.querySelector("#profile-full-name"),
   headline: document.querySelector("#profile-headline"),
@@ -76,6 +87,7 @@ const profileFieldErrors = {
   skills: document.querySelector("#profile-skills-error")
 };
 const profileFields = Object.keys(profileControls);
+let profileFormSnapshot = "";
 const employmentForm = document.querySelector("#employment-form");
 const employmentList = document.querySelector("#employment-list");
 const employmentEmpty = document.querySelector("#employment-empty");
@@ -167,11 +179,94 @@ function clearProfileFieldErrors() {
   });
 }
 
+const PROFILE_SUMMARY_LIMIT = 200;
+let isProfileSummaryExpanded = false;
+
+function renderProfile(profile = careerState.getProfile()) {
+  const hasProfile = Boolean(profile);
+
+  profileEmptyState.hidden = hasProfile;
+  profileDetails.hidden = !hasProfile;
+  profileAction.textContent = hasProfile ? "Edit Profile" : "Create Profile";
+
+  if (!hasProfile) {
+    profileDisplayName.textContent = "";
+    profileDisplayHeadline.textContent = "";
+    profileSummaryText.textContent = "";
+    profileSkillsList.replaceChildren();
+    profileSummaryToggle.hidden = true;
+    profileSummaryToggle.setAttribute("aria-expanded", "false");
+    isProfileSummaryExpanded = false;
+    return;
+  }
+
+  profileDisplayName.textContent = profile.fullName;
+  profileDisplayHeadline.textContent = profile.headline || "Not provided";
+
+  const summary = profile.summary || "Not provided";
+  const summaryIsLong = summary.length > PROFILE_SUMMARY_LIMIT;
+
+  isProfileSummaryExpanded = false;
+  profileSummaryToggle.hidden = !summaryIsLong;
+  profileSummaryToggle.setAttribute("aria-expanded", "false");
+
+  if (summaryIsLong) {
+    const cutoff = summary.lastIndexOf(" ", PROFILE_SUMMARY_LIMIT);
+
+    const preview = summary.slice(
+      0,
+      cutoff > 0 ? cutoff : PROFILE_SUMMARY_LIMIT
+    );
+
+    profileSummaryText.textContent = `${preview.trimEnd()}...`;
+    profileSummaryToggle.textContent = "Expand summary";
+  } else {
+    profileSummaryText.textContent = summary;
+  }
+
+  profileSkillsList.replaceChildren();
+
+  if (profile.skills.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "Not provided";
+    profileSkillsList.append(item);
+    return;
+  }
+
+  profile.skills.forEach((skill) => {
+    const item = document.createElement("li");
+    item.textContent = skill;
+    profileSkillsList.append(item);
+  });
+}
+
 function populateProfileForm(profile) {
   profileControls.fullName.value = profile?.fullName ?? "";
   profileControls.headline.value = profile?.headline ?? "";
   profileControls.summary.value = profile?.summary ?? "";
   profileControls.skills.value = profile?.skills.join("\n") ?? "";
+}
+
+function getProfileFormSnapshot() {
+  return JSON.stringify(profileFields.map((field) => profileControls[field].value));
+}
+
+function openProfileDialog() {
+  const profile = careerState.getProfile();
+  populateProfileForm(profile);
+  clearProfileFieldErrors();
+  profileFormSnapshot = getProfileFormSnapshot();
+
+  dialogManager.open(profileDialog, {
+    invoker: profileAction,
+    initialFocus: profileControls.fullName,
+    isDirty: () => getProfileFormSnapshot() !== profileFormSnapshot,
+    onDiscard() {
+      populateProfileForm(careerState.getProfile());
+      clearProfileFieldErrors();
+      profileFormSnapshot = getProfileFormSnapshot();
+    }
+  });
 }
 
 function readProfileForm() {
@@ -266,6 +361,7 @@ function saveProfile(event) {
 
     dialogManager.closeAfterMutation();
     populateProfileForm(profile);
+    renderProfile(profile);
     notifications.show(
       "success",
       existingProfile ? "Profile updated." : "Profile created."
@@ -1085,6 +1181,38 @@ function deleteAchievementRecord(record) {
   }
 }
 
+profileSummaryToggle.addEventListener("click", () => {
+  const profile = careerState.getProfile();
+
+  if (!profile) {
+    return;
+  }
+
+  isProfileSummaryExpanded = !isProfileSummaryExpanded;
+
+  if (isProfileSummaryExpanded) {
+    profileSummaryText.textContent = profile.summary;
+    profileSummaryToggle.textContent = "Collapse summary";
+  } else {
+    const cutoff = profile.summary.lastIndexOf(" ", PROFILE_SUMMARY_LIMIT);
+    const preview = profile.summary.slice(
+      0,
+      cutoff > 0 ? cutoff : PROFILE_SUMMARY_LIMIT
+    );
+
+    profileSummaryText.textContent = `${preview.trimEnd()}...`;
+    profileSummaryToggle.textContent = "Expand summary";
+  }
+
+  profileSummaryToggle.setAttribute(
+    "aria-expanded",
+    String(isProfileSummaryExpanded)
+  );
+});
+profileAction.addEventListener("click", openProfileDialog);
+profileCancel.addEventListener("click", () => {
+  dialogManager.requestClose();
+});
 profileForm.addEventListener("submit", saveProfile);
 profileForm.addEventListener("input", (event) => {
   const field = profileFields.find((item) => profileControls[item] === event.target);
@@ -1145,7 +1273,10 @@ achievementCancel.addEventListener("click", () => {
   achievementControls.title.focus();
 });
 
-populateProfileForm(careerState.getProfile());
+const initialProfile = careerState.getProfile();
+
+populateProfileForm(initialProfile);
+renderProfile(initialProfile);
 renderEmploymentRecords();
 renderAchievementRecords();
 

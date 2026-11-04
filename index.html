@@ -240,59 +240,34 @@
               Storage warnings will indicate when a change could not be saved.
             </p>
 
-            <form class="profile-form" id="profile-form" novalidate>
-              <div class="profile-field">
-                <label for="profile-full-name">Full name <span aria-hidden="true">*</span></label>
-                <input
-                  id="profile-full-name"
-                  name="fullName"
-                  type="text"
-                  autocomplete="name"
-                  aria-describedby="profile-full-name-help profile-full-name-error"
-                  required
-                >
-                <p class="profile-field-help" id="profile-full-name-help">Your name as you want it shown in your profile.</p>
-                <p class="profile-field-error" id="profile-full-name-error" hidden></p>
-              </div>
+            <section id="profile-empty-state" aria-labelledby="profile-empty-title" hidden>
+              <h2 id="profile-empty-title">Your profile is ready to create</h2>
+              <p>Add your name, professional headline, summary, and skills.</p>
+            </section>
 
-              <div class="profile-field">
-                <label for="profile-headline">Headline</label>
-                <input
-                  id="profile-headline"
-                  name="headline"
-                  type="text"
-                  aria-describedby="profile-headline-error"
-                >
-                <p class="profile-field-error" id="profile-headline-error" hidden></p>
+            <section id="profile-details" aria-labelledby="profile-display-name" hidden>
+              <h2 id="profile-display-name"></h2>
+              <p id="profile-display-headline"></p>
+              <div aria-labelledby="profile-summary-heading">
+                <h3 id="profile-summary-heading">Summary</h3>
+                <p id="profile-summary-text"></p>
+                <button
+                  id="profile-summary-toggle"
+                  type="button"
+                  aria-expanded="false"
+                  aria-controls="profile-summary-text"
+                  hidden
+                >Expand summary</button>
               </div>
+              <div aria-labelledby="profile-skills-heading">
+                <h3 id="profile-skills-heading">Skills</h3>
+                <ul id="profile-skills-list"></ul>
+              </div>
+            </section>
 
-              <div class="profile-field">
-                <label for="profile-summary">Summary</label>
-                <textarea
-                  id="profile-summary"
-                  name="summary"
-                  rows="5"
-                  aria-describedby="profile-summary-error"
-                ></textarea>
-                <p class="profile-field-error" id="profile-summary-error" hidden></p>
-              </div>
-
-              <div class="profile-field">
-                <label for="profile-skills">Skills</label>
-                <textarea
-                  id="profile-skills"
-                  name="skills"
-                  rows="5"
-                  aria-describedby="profile-skills-help profile-skills-error"
-                ></textarea>
-                <p class="profile-field-help" id="profile-skills-help">Enter one skill per line. Blank lines are ignored.</p>
-                <p class="profile-field-error" id="profile-skills-error" hidden></p>
-              </div>
-
-              <div class="profile-form-actions">
-                <button class="profile-submit" type="submit">Save profile</button>
-              </div>
-            </form>
+            <button class="profile-submit" id="profile-action" type="button">
+              Create Profile
+            </button>
           </div>
 
           <section class="employment-card" aria-labelledby="employment-title">
@@ -398,6 +373,72 @@
             </form>
           </section>
         </section>
+
+        <dialog
+          class="profile-dialog"
+          id="profile-dialog"
+          aria-labelledby="profile-dialog-title"
+          aria-describedby="profile-dialog-description"
+        >
+          <h2 id="profile-dialog-title">Create or edit your Career Profile</h2>
+          <p id="profile-dialog-description">
+            Add your name, professional headline, summary, and skills.
+          </p>
+          <form class="profile-form" id="profile-form" novalidate>
+            <div class="profile-field">
+              <label for="profile-full-name">Full name <span aria-hidden="true">*</span></label>
+              <input
+                id="profile-full-name"
+                name="fullName"
+                type="text"
+                autocomplete="name"
+                aria-describedby="profile-full-name-help profile-full-name-error"
+                required
+              >
+              <p class="profile-field-help" id="profile-full-name-help">Your name as you want it shown in your profile.</p>
+              <p class="profile-field-error" id="profile-full-name-error" hidden></p>
+            </div>
+
+            <div class="profile-field">
+              <label for="profile-headline">Headline</label>
+              <input
+                id="profile-headline"
+                name="headline"
+                type="text"
+                aria-describedby="profile-headline-error"
+              >
+              <p class="profile-field-error" id="profile-headline-error" hidden></p>
+            </div>
+
+            <div class="profile-field">
+              <label for="profile-summary">Summary</label>
+              <textarea
+                id="profile-summary"
+                name="summary"
+                rows="5"
+                aria-describedby="profile-summary-error"
+              ></textarea>
+              <p class="profile-field-error" id="profile-summary-error" hidden></p>
+            </div>
+
+            <div class="profile-field">
+              <label for="profile-skills">Skills</label>
+              <textarea
+                id="profile-skills"
+                name="skills"
+                rows="5"
+                aria-describedby="profile-skills-help profile-skills-error"
+              ></textarea>
+              <p class="profile-field-help" id="profile-skills-help">Enter one skill per line. Blank lines are ignored.</p>
+              <p class="profile-field-error" id="profile-skills-error" hidden></p>
+            </div>
+
+            <div class="profile-form-actions">
+              <button class="profile-submit" type="submit">Save profile</button>
+              <button class="profile-cancel" id="profile-cancel" type="button">Cancel</button>
+            </div>
+          </form>
+        </dialog>
 
         <section
           class="achievement-view"
