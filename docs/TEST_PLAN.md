@@ -472,6 +472,68 @@ For each execution, record:
 
 Do not mark a test as passed without executing it.
 
+### UX-005B–UX-005E — Completed UX refinement verification
+
+- Date: Not recorded in the supplied verification results.
+- Task IDs: UX-005B, UX-005C, UX-005D, and UX-005E.
+
+#### UX-005B — Contrast verification
+
+- Chrome browser verification: 7/7 passed.
+- Verified welcome-gradient and muted-text readability, translucent top-bar
+  breadcrumb readability, input/date/select boundaries, keyboard focus
+  visibility, focus indicators in editor and discard-confirmation states, and
+  responsive and zoom behavior.
+- Contrast CSS changes were committed as `6f2109a`
+  (`fix: improve text and focus contrast`).
+
+#### UX-005C — Responsive and visual usability
+
+- Chrome browser verification: 7/7 passed.
+- Verified Profile, Employment, and Achievements on desktop, tablet, and
+  mobile; no overflow or inaccessible controls at 320px and 375px; 200% zoom;
+  breakpoint transitions; and direct hash navigation, active navigation, and
+  mobile navigation after resizing.
+
+#### UX-005D — Keyboard-only regression
+
+- Chrome browser verification: 8/8 passed.
+- Verified navigation; Profile, Employment, and Achievement CRUD; validation
+  and first-invalid-field focus; dirty-dialog confirmation; notification
+  dismissal; and focus restoration.
+
+#### UX-005E — Persistence and recovery
+
+- Chrome Incognito browser verification:
+  - Clean-session persistence and reload: 6/6 passed.
+  - Malformed JSON: the original corrupt value was preserved and a warning
+    displayed.
+  - Unsupported version 999: the original value and all data sections were
+    preserved and a warning displayed.
+  - Valid version-1 state restored successfully.
+  - Simulated `Storage.prototype.setItem` failures for Profile, Employment,
+    and Achievement: 3/3 passed. In-memory mutations remained visible, and a
+    separate persistence warning appeared alongside ordinary operation
+    notifications.
+  - After restoring the storage method, a later successful mutation saved the
+    complete current state; reload restored all changes.
+
+#### Final automated regression
+
+- `npm test`: 195 passed, 0 failed.
+- `node --check` passed for `src/js/app.js`, `src/js/dialogs.js`,
+  `src/js/navigation.js`, and `src/js/notifications.js`.
+- `git diff --check` passed.
+- The working tree was clean at final regression time. The final regression's
+  commit identifier was not recorded in the supplied results.
+
+#### Assistive-technology limitation
+
+- Screen-reader testing was not performed because a screen reader was
+  unavailable. Semantic markup, keyboard behavior, visible focus, and
+  browser-based accessibility checks were performed, but this is not full
+  assistive-technology verification.
+
 ## 11. Release Readiness
 
 A release should not be considered ready until:
