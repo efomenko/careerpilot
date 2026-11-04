@@ -122,11 +122,17 @@ let employmentFormSnapshot = "";
 let pendingEmploymentDeletion = null;
 let isDeletingEmployment = false;
 const achievementForm = document.querySelector("#achievement-form");
+const achievementDialog = document.querySelector("#achievement-dialog");
+const achievementCreateAction = document.querySelector("#achievement-create-action");
 const achievementList = document.querySelector("#achievement-list");
 const achievementEmpty = document.querySelector("#achievement-empty");
 const achievementFormTitle = document.querySelector("#achievement-form-title");
 const achievementSubmit = document.querySelector("#achievement-submit");
 const achievementCancel = document.querySelector("#achievement-cancel");
+const achievementDeleteDialog = document.querySelector("#achievement-delete-dialog");
+const achievementDeleteRecordName = document.querySelector("#achievement-delete-record-name");
+const achievementDeleteCancel = document.querySelector("#achievement-delete-cancel");
+const achievementDeleteConfirm = document.querySelector("#achievement-delete-confirm");
 const achievementActions = document.querySelector("#achievement-actions");
 const achievementMetrics = document.querySelector("#achievement-metrics");
 const achievementEvidence = document.querySelector("#achievement-evidence");
@@ -147,6 +153,9 @@ const achievementVerificationStatuses = [
 let editingAchievementId = null;
 let achievementEntryNumber = 0;
 let achievementErrorTargets = {};
+let achievementFormSnapshot = "";
+let pendingAchievementDeletion = null;
+let isDeletingAchievement = false;
 
 // Each view supplies the label and status shown when its hash is selected.
 const views = {
@@ -775,7 +784,7 @@ function createAchievementField(parent, labelText, type, options = {}) {
   return control;
 }
 
-function addAchievementAction(value = "") {
+function addAchievementAction(value = "", shouldFocus = true) {
   const row = document.createElement("div");
   row.className = "achievement-entry achievement-action-entry";
   const actionIndex = achievementActions.children.length;
@@ -798,10 +807,12 @@ function addAchievementAction(value = "") {
   });
   row.append(remove);
   achievementActions.append(row);
-  action.focus();
+  if (shouldFocus) {
+    action.focus();
+  }
 }
 
-function addAchievementMetric(metric = {}) {
+function addAchievementMetric(metric = {}, shouldFocus = true) {
   const row = document.createElement("div");
   row.className = "achievement-entry achievement-metric-entry";
   const fields = document.createElement("div");
@@ -849,10 +860,12 @@ function addAchievementMetric(metric = {}) {
 
   row.append(fields, remove);
   achievementMetrics.append(row);
-  fields.querySelector("input").focus();
+  if (shouldFocus) {
+    fields.querySelector("input").focus();
+  }
 }
 
-function addAchievementEvidence(value = "") {
+function addAchievementEvidence(value = "", shouldFocus = true) {
   const row = document.createElement("div");
   row.className = "achievement-entry achievement-evidence-entry";
   const evidenceIndex = achievementEvidence.children.length;
@@ -878,7 +891,9 @@ function addAchievementEvidence(value = "") {
   });
   row.append(remove);
   achievementEvidence.append(row);
-  evidence.focus();
+  if (shouldFocus) {
+    evidence.focus();
+  }
 }
 
 function refreshAchievementErrorTargets() {
@@ -989,12 +1004,14 @@ function updateAchievementVerificationStatus(recordId, select) {
       "success",
       `Verification status updated to ${getAchievementVerificationLabel(updatedRecord.verificationStatus)}.`
     );
+    focusAchievementAction(recordId, ".achievement-status-update");
   } catch (error) {
     renderAchievementRecords();
     notifications.show(
       "error",
       error.message || "The verification status could not be updated."
     );
+    focusAchievementAction(recordId, ".achievement-status-update");
   }
 }
 
@@ -1007,6 +1024,7 @@ function renderAchievementRecords() {
   records.forEach((record, index) => {
     const article = document.createElement("article");
     article.className = "achievement-record";
+    article.dataset.achievementId = record.id;
     article.setAttribute("role", "listitem");
 
     const heading = document.createElement("h3");
@@ -1055,71 +1073,10 @@ function renderAchievementRecords() {
     verification.append(verificationHeading, currentStatus, statusControl);
     article.append(verification);
 
-    if (record.context) {
-      appendAchievementText(article, "Context", record.context);
-    }
     appendAchievementText(article, "Contribution", record.contribution);
     if (record.outcome) {
       appendAchievementText(article, "Actual outcome", record.outcome);
     }
-    if (record.potentialImpact) {
-      appendAchievementText(article, "Potential impact", record.potentialImpact);
-    }
-
-    if (record.actions.length > 0) {
-      const section = document.createElement("div");
-      section.className = "achievement-record-section";
-      const actionsHeading = document.createElement("h4");
-      actionsHeading.textContent = "Actions";
-      const actions = document.createElement("ul");
-      actions.className = "achievement-record-list";
-      record.actions.forEach((action) => {
-        const item = document.createElement("li");
-        item.textContent = action;
-        actions.append(item);
-      });
-      section.append(actionsHeading, actions);
-      article.append(section);
-    }
-
-    if (record.metrics.length > 0) {
-      const section = document.createElement("div");
-      section.className = "achievement-record-section";
-      const metricsHeading = document.createElement("h4");
-      metricsHeading.textContent = "Metrics";
-      const metrics = document.createElement("ul");
-      metrics.className = "achievement-record-list";
-      record.metrics.forEach((metric) => {
-        const item = document.createElement("li");
-        const period = Object.hasOwn(metric, "period") && metric.period !== ""
-          ? ` (${metric.period})`
-          : "";
-        item.textContent = `${metric.name}: ${metric.value} ${metric.unit}${period} — ${metric.basis}`;
-        metrics.append(item);
-      });
-      section.append(metricsHeading, metrics);
-      article.append(section);
-    }
-
-    if (record.evidence.length > 0) {
-      const section = document.createElement("div");
-      section.className = "achievement-record-section";
-      const evidenceHeading = document.createElement("h4");
-      evidenceHeading.textContent = "Supporting evidence";
-      const evidence = document.createElement("ul");
-      evidence.className = "achievement-record-list";
-      record.evidence.forEach((value) => {
-        const item = document.createElement("li");
-        const formatted = document.createElement("pre");
-        formatted.className = "achievement-evidence-value";
-        formatted.textContent = JSON.stringify(value, null, 2);
-        item.append(formatted);
-        evidence.append(item);
-      });
-      section.append(evidenceHeading, evidence);
-      article.append(section);
-    }
-
     if (record.employmentId) {
       const employment = careerState.getEmploymentRecords()
         .find((item) => item.id === record.employmentId);
@@ -1130,6 +1087,8 @@ function renderAchievementRecords() {
           ? `${employment.roleTitle} — ${employment.employer}`
           : "Linked employment record unavailable"
       );
+    } else {
+      appendAchievementText(article, "Employment", "No employment link");
     }
 
     const actions = document.createElement("div");
@@ -1139,14 +1098,18 @@ function renderAchievementRecords() {
     editButton.type = "button";
     editButton.textContent = "Edit";
     editButton.setAttribute("aria-label", `Edit achievement: ${record.title}`);
-    editButton.addEventListener("click", () => beginAchievementEdit(record));
+    editButton.addEventListener("click", () =>
+      beginAchievementEdit(record, editButton)
+    );
 
     const deleteButton = document.createElement("button");
     deleteButton.className = "achievement-action-button achievement-action-button--delete";
     deleteButton.type = "button";
     deleteButton.textContent = "Delete";
     deleteButton.setAttribute("aria-label", `Delete achievement: ${record.title}`);
-    deleteButton.addEventListener("click", () => deleteAchievementRecord(record));
+    deleteButton.addEventListener("click", () =>
+      openAchievementDeleteDialog(record, deleteButton)
+    );
     actions.append(editButton, deleteButton);
     article.append(actions);
     achievementList.append(article);
@@ -1161,12 +1124,17 @@ function resetAchievementForm() {
   editingAchievementId = null;
   achievementFormTitle.textContent = "Add achievement";
   achievementSubmit.textContent = "Add achievement";
-  achievementCancel.hidden = true;
   clearAchievementFieldErrors();
 }
 
-function beginAchievementEdit(record) {
+function populateAchievementForm(record) {
   resetAchievementForm();
+
+  if (!record) {
+    renderAchievementEmploymentOptions();
+    return;
+  }
+
   editingAchievementId = record.id;
   achievementControls.title.value = record.title;
   achievementControls.context.value = record.context;
@@ -1174,13 +1142,69 @@ function beginAchievementEdit(record) {
   achievementControls.outcome.value = record.outcome;
   achievementControls.potentialImpact.value = record.potentialImpact;
   renderAchievementEmploymentOptions(record.employmentId ?? "");
-  record.actions.forEach((action) => addAchievementAction(action));
-  record.metrics.forEach((metric) => addAchievementMetric(metric));
-  record.evidence.forEach((value) => addAchievementEvidence(JSON.stringify(value)));
+  record.actions.forEach((action) => addAchievementAction(action, false));
+  record.metrics.forEach((metric) => addAchievementMetric(metric, false));
+  record.evidence.forEach((value) =>
+    addAchievementEvidence(JSON.stringify(value), false)
+  );
   achievementFormTitle.textContent = `Edit ${record.title}`;
   achievementSubmit.textContent = "Save changes";
-  achievementCancel.hidden = false;
-  achievementControls.title.focus();
+}
+
+function getAchievementFormSnapshot() {
+  const metrics = [...achievementMetrics.querySelectorAll(".achievement-metric-entry")]
+    .map((row) => [...row.querySelectorAll("[data-metric-field]")]
+      .map((control) => [control.dataset.metricField, control.value]));
+
+  return JSON.stringify({
+    title: achievementControls.title.value,
+    context: achievementControls.context.value,
+    contribution: achievementControls.contribution.value,
+    outcome: achievementControls.outcome.value,
+    potentialImpact: achievementControls.potentialImpact.value,
+    employmentId: achievementEmployment.value,
+    actions: [...achievementActions.querySelectorAll("input")]
+      .map((control) => control.value),
+    metrics,
+    evidence: [...achievementEvidence.querySelectorAll("textarea")]
+      .map((control) => control.value)
+  });
+}
+
+function openAchievementDialog({ invoker, record = null }) {
+  if (dialogManager.isOpen() || achievementDeleteDialog.open) {
+    return;
+  }
+
+  populateAchievementForm(record);
+  achievementFormSnapshot = getAchievementFormSnapshot();
+
+  dialogManager.open(achievementDialog, {
+    invoker,
+    initialFocus: achievementControls.title,
+    isDirty: () => getAchievementFormSnapshot() !== achievementFormSnapshot,
+    onDiscard() {
+      const savedRecord = editingAchievementId === null
+        ? null
+        : careerState.getAchievementRecords()
+          .find((item) => item.id === editingAchievementId) ?? null;
+
+      populateAchievementForm(savedRecord);
+      achievementFormSnapshot = getAchievementFormSnapshot();
+    }
+  });
+}
+
+function beginAchievementEdit(record, invoker) {
+  openAchievementDialog({ invoker, record });
+}
+
+function focusAchievementAction(recordId, selector) {
+  const article = [...achievementList.querySelectorAll(".achievement-record")]
+    .find((item) => item.dataset.achievementId === recordId);
+  const action = article?.querySelector(selector);
+
+  (action ?? achievementCreateAction).focus();
 }
 
 function readAchievementForm() {
@@ -1238,20 +1262,21 @@ function saveAchievementRecord(event) {
   try {
     const input = readAchievementForm();
     let successMessage;
+    let savedRecord;
     if (editingAchievementId) {
       const existingRecord = careerState.getAchievementRecords()
         .find((record) => record.id === editingAchievementId);
-      const updatedRecord = careerState.updateAchievementRecord(
+      savedRecord = careerState.updateAchievementRecord(
         editingAchievementId,
         input,
         new Date().toISOString()
       );
       successMessage = existingRecord.verificationStatus === "verified"
-        && updatedRecord.verificationStatus === "unverified"
+        && savedRecord.verificationStatus === "unverified"
         ? "Achievement content changed. Verification was reset to Unverified."
         : "Achievement updated.";
     } else {
-      careerState.addAchievementRecord(input, {
+      savedRecord = careerState.addAchievementRecord(input, {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       });
@@ -1262,6 +1287,10 @@ function saveAchievementRecord(event) {
     resetAchievementForm();
     renderAchievementRecords();
     notifications.show("success", successMessage);
+    focusAchievementAction(
+      savedRecord.id,
+      ".achievement-action-button:not(.achievement-action-button--delete)"
+    );
   } catch (error) {
     if (Array.isArray(error.errors)) {
       showAchievementValidationErrors(error.errors);
@@ -1274,22 +1303,75 @@ function saveAchievementRecord(event) {
   }
 }
 
-function deleteAchievementRecord(record) {
+function openAchievementDeleteDialog(record, invoker) {
+  if (dialogManager.isOpen() || achievementDialog.open || achievementDeleteDialog.open) {
+    return;
+  }
+
+  const records = careerState.getAchievementRecords();
+  const recordIndex = records.findIndex((item) => item.id === record.id);
+  if (recordIndex === -1) {
+    notifications.show("error", "The achievement could not be found.");
+    return;
+  }
+
+  pendingAchievementDeletion = {
+    id: record.id,
+    focusRecordId: records[recordIndex + 1]?.id
+      ?? records[recordIndex - 1]?.id
+      ?? null
+  };
+  achievementDeleteRecordName.textContent = record.title;
+
   try {
-    careerState.deleteAchievementRecord(record.id);
-    dialogManager.closeAfterMutation();
-    if (editingAchievementId === record.id) {
-      resetAchievementForm();
-    }
-    renderAchievementRecords();
-    notifications.show("success", "Achievement deleted.");
-    document.querySelector("#achievements-title").focus();
+    dialogManager.open(achievementDeleteDialog, {
+      invoker,
+      initialFocus: achievementDeleteCancel,
+      isDirty: () => false
+    });
   } catch (error) {
+    pendingAchievementDeletion = null;
+    notifications.show(
+      "error",
+      error.message || "The achievement deletion confirmation could not be opened."
+    );
+  }
+}
+
+function confirmAchievementDeletion() {
+  const pendingDeletion = pendingAchievementDeletion;
+  if (
+    !pendingDeletion
+    || !achievementDeleteDialog.open
+    || isDeletingAchievement
+  ) {
+    return;
+  }
+
+  isDeletingAchievement = true;
+  try {
+    careerState.deleteAchievementRecord(pendingDeletion.id);
+  } catch (error) {
+    isDeletingAchievement = false;
     notifications.show(
       "error",
       error.message || "The achievement could not be deleted."
     );
+    return;
   }
+
+  pendingAchievementDeletion = null;
+  isDeletingAchievement = false;
+  dialogManager.closeAfterMutation();
+  if (editingAchievementId === pendingDeletion.id) {
+    resetAchievementForm();
+  }
+  renderAchievementRecords();
+  notifications.show("success", "Achievement deleted.");
+  focusAchievementAction(
+    pendingDeletion.focusRecordId,
+    ".achievement-action-button:not(.achievement-action-button--delete)"
+  );
 }
 
 profileSummaryToggle.addEventListener("click", () => {
@@ -1383,6 +1465,9 @@ achievementForm.addEventListener("change", (event) => {
     clearFieldError(control, error);
   }
 });
+achievementCreateAction.addEventListener("click", () => {
+  openAchievementDialog({ invoker: achievementCreateAction });
+});
 document.querySelector("#achievement-add-action").addEventListener("click", () => {
   addAchievementAction();
 });
@@ -1393,9 +1478,18 @@ document.querySelector("#achievement-add-evidence").addEventListener("click", ()
   addAchievementEvidence();
 });
 achievementCancel.addEventListener("click", () => {
-  resetAchievementForm();
-  achievementControls.title.focus();
+  dialogManager.requestClose();
 });
+achievementDeleteDialog.addEventListener("cancel", () => {
+  if (!isDeletingAchievement) {
+    pendingAchievementDeletion = null;
+  }
+});
+achievementDeleteCancel.addEventListener("click", () => {
+  dialogManager.requestClose();
+  pendingAchievementDeletion = null;
+});
+achievementDeleteConfirm.addEventListener("click", confirmAchievementDeletion);
 
 const initialProfile = careerState.getProfile();
 
