@@ -379,6 +379,17 @@ Expected outputs must be documented after the scoring formula is agreed.
 - Check zoom and text wrapping.
 - Confirm reduced-motion preferences are respected where relevant.
 
+### UX-005A — Browser navigation while dialogs are open
+
+- In Chrome, navigate between Profile, Employment, and Achievements.
+- With a clean dialog open, use Back and Forward; confirm it closes and the destination view receives focus.
+- With a dirty dialog open, use Back and Forward; confirm discard confirmation appears without losing the form values.
+- Choose Continue editing; confirm the original view, dialog, and entered values remain, and the URL returns to the original history entry.
+- Repeat and confirm discard; confirm the destination navigation completes once and focus moves to the destination.
+- Repeat Back and Forward while the discard confirmation is open; confirm the pending destination is not lost and no extra history entries are created.
+- Confirm ordinary navigation without a dialog, direct hashes, unknown-hash fallback, and browser Back/Forward remain unchanged.
+- Unit tests use a controlled History API fake; they do not prove native browser history behavior or screen-reader behavior.
+
 ### CP-052 — Demo data
 
 - Confirm demo records are fictional.

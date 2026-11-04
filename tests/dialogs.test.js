@@ -308,7 +308,13 @@ test("dirty Cancel uses the same internal confirmation state", () => {
 
 test("Continue editing restores feature content and previously focused control", () => {
   const state = setup();
-  openDialog(state, { isDirty: () => true });
+  let continueCount = 0;
+  openDialog(state, {
+    isDirty: () => true,
+    onContinueEditing() {
+      continueCount += 1;
+    }
+  });
   state.secondFeatureControl.focus();
   state.manager.requestClose();
 
@@ -320,11 +326,18 @@ test("Continue editing restores feature content and previously focused control",
   assert.equal(state.featureContent.hidden, false);
   assert.equal(state.document.activeElement, state.secondFeatureControl);
   assert.equal(state.manager.isOpen(), true);
+  assert.equal(continueCount, 1);
 });
 
 test("Escape from confirmation returns to feature state without discarding", () => {
   const state = setup();
-  openDialog(state, { isDirty: () => true });
+  let continueCount = 0;
+  openDialog(state, {
+    isDirty: () => true,
+    onContinueEditing() {
+      continueCount += 1;
+    }
+  });
   state.secondFeatureControl.focus();
   state.manager.requestClose();
 
@@ -334,6 +347,7 @@ test("Escape from confirmation returns to feature state without discarding", () 
   assert.equal(state.discardDialog.parentNode, state.host);
   assert.equal(state.featureContent.hidden, false);
   assert.equal(state.document.activeElement, state.secondFeatureControl);
+  assert.equal(continueCount, 1);
 });
 
 test("discard closes the single modal and invokes onDiscard exactly once", () => {

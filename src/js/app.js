@@ -1,6 +1,7 @@
 
 import { createCareerPersistence } from "./career-persistence.js";
 import { createDialogManager } from "./dialogs.js";
+import { createNavigationController } from "./navigation.js";
 import { createNotifications } from "./notifications.js";
 import { clearFieldError, showFieldError } from "./feedback.js";
 import { validateRequired } from "./validation.js";
@@ -191,6 +192,28 @@ const views = {
   }
 };
 
+const navigation = createNavigationController({
+  window,
+  dialogManager,
+  views,
+  navigateTo
+});
+
+function openDialogWithNavigation(dialog, options) {
+  const { onDiscard, ...dialogOptions } = options;
+  dialogManager.open(dialog, {
+    ...dialogOptions,
+    onDiscard() {
+      onDiscard?.();
+      navigation.discardAndNavigate();
+    },
+    onContinueEditing() {
+      navigation.continueEditing();
+    }
+  });
+  navigation.dialogOpened();
+}
+
 function clearProfileFieldErrors() {
   profileFields.forEach((field) => {
     clearFieldError(profileControls[field], profileFieldErrors[field]);
@@ -275,7 +298,7 @@ function openProfileDialog() {
   clearProfileFieldErrors();
   profileFormSnapshot = getProfileFormSnapshot();
 
-  dialogManager.open(profileDialog, {
+  openDialogWithNavigation(profileDialog, {
     invoker: profileAction,
     initialFocus: profileControls.fullName,
     isDirty: () => getProfileFormSnapshot() !== profileFormSnapshot,
@@ -437,7 +460,7 @@ function openEmploymentDialog({ invoker, record = null }) {
   clearEmploymentFieldErrors();
   employmentFormSnapshot = getEmploymentFormSnapshot();
 
-  dialogManager.open(employmentDialog, {
+  openDialogWithNavigation(employmentDialog, {
     invoker,
     initialFocus: employmentControls.employer,
     isDirty: () => getEmploymentFormSnapshot() !== employmentFormSnapshot,
@@ -1179,7 +1202,7 @@ function openAchievementDialog({ invoker, record = null }) {
   populateAchievementForm(record);
   achievementFormSnapshot = getAchievementFormSnapshot();
 
-  dialogManager.open(achievementDialog, {
+  openDialogWithNavigation(achievementDialog, {
     invoker,
     initialFocus: achievementControls.title,
     isDirty: () => getAchievementFormSnapshot() !== achievementFormSnapshot,
@@ -1530,7 +1553,7 @@ function focusFirstMobileNavigationLink() {
   firstNavigationLink.focus();
 }
 
-function navigateTo(viewName) {
+function navigateTo(viewName, { focusDestination = false } = {}) {
   const view = views[viewName];
 
   if (!view) {
@@ -1574,7 +1597,7 @@ function navigateTo(viewName) {
 
   closeMobileMenu();
 
-  if (menuWasOpen) {
+  if (menuWasOpen || focusDestination) {
     document.querySelector("#main-content").focus();
   }
 }
@@ -1589,20 +1612,8 @@ navigationLinks.forEach((link) => {
       return;
     }
 
-    navigateTo(viewName);
-
-    if (window.location.hash !== `#${viewName}`) {
-      window.location.hash = viewName;
-    }
+    navigation.navigate(viewName);
   });
-});
-
-// Keep the visible page in sync when the URL hash changes, including Back/Forward.
-window.addEventListener("hashchange", () => {
-  const requestedView = window.location.hash.slice(1);
-  const viewName = views[requestedView] ? requestedView : "dashboard";
-
-  navigateTo(viewName);
 });
 
 menuToggle.addEventListener("click", () => {
@@ -1650,4 +1661,5 @@ function initializeApp() {
   navigateTo(initialView);
 }
 
+navigation.start();
 initializeApp();

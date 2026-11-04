@@ -261,13 +261,19 @@ export function createDialogManager({
     returnFocusToFeatureState();
   }
 
+  function continueEditing() {
+    const current = active;
+    returnToFeatureState();
+    current?.onContinueEditing?.();
+  }
+
   function requestClose() {
     if (!active) {
       return false;
     }
 
     if (active.confirming) {
-      returnToFeatureState();
+      continueEditing();
       return true;
     }
 
@@ -285,7 +291,7 @@ export function createDialogManager({
   }
 
   function handleContinueEditing() {
-    returnToFeatureState();
+    continueEditing();
   }
 
   function handleDiscardChanges() {
@@ -302,7 +308,8 @@ export function createDialogManager({
       invoker,
       initialFocus,
       isDirty,
-      onDiscard
+      onDiscard,
+      onContinueEditing
     } = {}) {
       assertDialog(dialog, "dialog");
       assertFocusable(invoker, "invoker");
@@ -312,6 +319,12 @@ export function createDialogManager({
       }
       if (onDiscard !== undefined && typeof onDiscard !== "function") {
         throw new TypeError("onDiscard must be a function.");
+      }
+      if (
+        onContinueEditing !== undefined
+        && typeof onContinueEditing !== "function"
+      ) {
+        throw new TypeError("onContinueEditing must be a function.");
       }
       if (active) {
         throw new Error("A dialog is already active.");
@@ -326,6 +339,7 @@ export function createDialogManager({
         initialFocus,
         isDirty,
         onDiscard,
+        onContinueEditing,
         confirming: false,
         handleCancel
       };
