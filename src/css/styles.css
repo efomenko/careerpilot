@@ -825,6 +825,54 @@ a:focus-visible {
   margin-top: 22px;
 }
 
+.employment-record {
+  min-width: 0;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+}
+
+.employment-record-title {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.employment-record-employer {
+  margin: 5px 0 0;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.employment-record-dates {
+  margin: 4px 0 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.employment-record-responsibilities {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.employment-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .employment-empty {
   margin: 22px 0 0;
   padding: 18px;
@@ -840,48 +888,9 @@ a:focus-visible {
   display: none;
 }
 
-.employment-record {
-  min-width: 0;
-  padding: 18px;
-  background: #fff;
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-}
-
-.employment-record-title {
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 17px;
-}
-
-.employment-record-employer,
-.employment-record-dates {
-  margin: 6px 0 0;
-  color: var(--color-muted);
-  font-size: 13px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.employment-record-responsibilities {
-  margin: 14px 0 0;
-  padding-left: 20px;
-  color: var(--color-text);
-  font-size: 13px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-.employment-record-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 16px;
-}
-
 .employment-action,
 .employment-cancel {
-  min-height: 40px;
+  min-height: 44px;
   padding: 8px 13px;
   color: var(--color-primary-dark);
   background: #f5f3ff;
@@ -912,6 +921,63 @@ a:focus-visible {
 .employment-cancel:focus-visible {
   outline: 3px solid #9d91ff;
   outline-offset: 3px;
+}
+
+.employment-dialog,
+.employment-delete-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-width: 100%;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  margin: auto;
+  padding: clamp(20px, 4vw, 32px);
+  overflow-y: auto;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow: 0 20px 60px rgb(37 36 58 / 20%);
+}
+
+.employment-dialog::backdrop,
+.employment-delete-dialog::backdrop {
+  background: rgb(37 36 58 / 56%);
+  backdrop-filter: blur(2px);
+}
+
+.employment-dialog > h2,
+.employment-delete-dialog > h2 {
+  margin: 0;
+  font-size: clamp(21px, 3vw, 26px);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.employment-dialog > p,
+.employment-delete-dialog-description p {
+  margin: 10px 0 0;
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.employment-dialog .employment-form {
+  margin-top: 22px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.employment-delete-dialog {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.employment-delete-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
 }
 
 .employment-form {
@@ -1384,6 +1450,31 @@ a:focus-visible {
 }
 
 @media (max-width: 520px) {
+  .employment-heading {
+    flex-direction: column;
+  }
+
+  #employment-add-action {
+    width: 100%;
+  }
+
+  .employment-dialog,
+  .employment-delete-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+    padding: 18px;
+    border-radius: 14px;
+  }
+
+  .employment-delete-dialog-actions {
+    flex-direction: column-reverse;
+  }
+
+  .employment-delete-dialog-actions button {
+    width: 100%;
+  }
+
   .achievement-verification-control {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1491,6 +1582,14 @@ a:focus-visible {
 @media (max-width: 760px) {
   .employment-form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .employment-heading {
+    align-items: stretch;
+  }
+
+  #employment-add-action {
+    flex-shrink: 0;
   }
 
   .employment-responsibilities-field {

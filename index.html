@@ -277,6 +277,9 @@
                 <h2 id="employment-title" tabindex="-1">Employment History</h2>
                 <p class="employment-description">Add roles to keep your work history organized.</p>
               </div>
+              <button class="profile-submit" id="employment-add-action" type="button">
+                Add Employment
+              </button>
             </div>
 
             <div
@@ -286,91 +289,7 @@
               aria-label="Employment records"
               aria-live="polite"
             ></div>
-            <p class="employment-empty" id="employment-empty">No employment records yet. Add your first role below.</p>
-            <form class="employment-form" id="employment-form" novalidate>
-              <h3 class="employment-form-title" id="employment-form-title">Add employment</h3>
-
-              <div class="employment-form-grid">
-                <div class="profile-field">
-                  <label for="employment-employer">Employer <span aria-hidden="true">*</span></label>
-                  <input
-                    id="employment-employer"
-                    name="employer"
-                    type="text"
-                    aria-describedby="employment-employer-error"
-                    required
-                  >
-                  <p class="profile-field-error" id="employment-employer-error" hidden></p>
-                </div>
-
-                <div class="profile-field">
-                  <label for="employment-role-title">Role title <span aria-hidden="true">*</span></label>
-                  <input
-                    id="employment-role-title"
-                    name="roleTitle"
-                    type="text"
-                    aria-describedby="employment-role-title-error"
-                    required
-                  >
-                  <p class="profile-field-error" id="employment-role-title-error" hidden></p>
-                </div>
-
-                <div class="profile-field">
-                  <label for="employment-start-date">Start date <span aria-hidden="true">*</span></label>
-                  <input
-                    id="employment-start-date"
-                    name="startDate"
-                    type="date"
-                    aria-describedby="employment-start-date-error"
-                    required
-                  >
-                  <p class="profile-field-error" id="employment-start-date-error" hidden></p>
-                </div>
-
-                <div class="profile-field">
-                  <label for="employment-end-date">End date</label>
-                  <input
-                    id="employment-end-date"
-                    name="endDate"
-                    type="text"
-                    placeholder="YYYY-MM-DD"
-                    aria-describedby="employment-end-date-help employment-end-date-error"
-                  >
-                  <p class="profile-field-help" id="employment-end-date-help">Enter a date as YYYY-MM-DD, or leave blank if the end date is unknown.</p>
-                  <p class="profile-field-error" id="employment-end-date-error" hidden></p>
-                </div>
-
-                <div class="profile-field employment-current-field">
-                  <input
-                    id="employment-is-current"
-                    name="isCurrent"
-                    type="checkbox"
-                    aria-controls="employment-end-date"
-                    aria-describedby="employment-is-current-help employment-is-current-error"
-                  >
-                  <label for="employment-is-current">This is my current role</label>
-                  <p class="profile-field-help" id="employment-is-current-help">When selected, the end date is disabled and saved with no end date.</p>
-                  <p class="profile-field-error" id="employment-is-current-error" hidden></p>
-                </div>
-
-                <div class="profile-field employment-responsibilities-field">
-                  <label for="employment-responsibilities">Responsibilities</label>
-                  <textarea
-                    id="employment-responsibilities"
-                    name="responsibilities"
-                    rows="4"
-                    aria-describedby="employment-responsibilities-help employment-responsibilities-error"
-                  ></textarea>
-                  <p class="profile-field-help" id="employment-responsibilities-help">Enter one responsibility per line. Blank lines are ignored.</p>
-                  <p class="profile-field-error" id="employment-responsibilities-error" hidden></p>
-                </div>
-              </div>
-
-              <div class="profile-form-actions">
-                <button class="profile-submit" id="employment-submit" type="submit">Add employment</button>
-                <button class="employment-cancel" id="employment-cancel" type="button" hidden>Cancel edit</button>
-              </div>
-            </form>
+            <p class="employment-empty" id="employment-empty">No employment records yet. Select Add Employment to add your first role.</p>
           </section>
         </section>
 
@@ -438,6 +357,129 @@
               <button class="profile-cancel" id="profile-cancel" type="button">Cancel</button>
             </div>
           </form>
+        </dialog>
+
+        <dialog
+          class="employment-dialog"
+          id="employment-dialog"
+          aria-labelledby="employment-dialog-title"
+          aria-describedby="employment-dialog-description"
+        >
+          <h2 id="employment-dialog-title">Add or edit employment</h2>
+          <p id="employment-dialog-description">
+            Enter the employer, role, dates, and responsibilities for this employment record.
+          </p>
+          <form class="employment-form" id="employment-form" novalidate>
+            <h3 class="employment-form-title" id="employment-form-title">Add employment</h3>
+
+            <div class="employment-form-grid">
+              <div class="profile-field">
+                <label for="employment-employer">Employer <span aria-hidden="true">*</span></label>
+                <input
+                  id="employment-employer"
+                  name="employer"
+                  type="text"
+                  aria-describedby="employment-employer-error"
+                  required
+                >
+                <p class="profile-field-error" id="employment-employer-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="employment-role-title">Role title <span aria-hidden="true">*</span></label>
+                <input
+                  id="employment-role-title"
+                  name="roleTitle"
+                  type="text"
+                  aria-describedby="employment-role-title-error"
+                  required
+                >
+                <p class="profile-field-error" id="employment-role-title-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="employment-start-date">Start date <span aria-hidden="true">*</span></label>
+                <input
+                  id="employment-start-date"
+                  name="startDate"
+                  type="date"
+                  aria-describedby="employment-start-date-error"
+                  required
+                >
+                <p class="profile-field-error" id="employment-start-date-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="employment-end-date">End date</label>
+                <input
+                  id="employment-end-date"
+                  name="endDate"
+                  type="text"
+                  placeholder="YYYY-MM-DD"
+                  aria-describedby="employment-end-date-help employment-end-date-error"
+                >
+                <p class="profile-field-help" id="employment-end-date-help">Enter a date as YYYY-MM-DD, or leave blank if the end date is unknown.</p>
+                <p class="profile-field-error" id="employment-end-date-error" hidden></p>
+              </div>
+
+              <div class="profile-field employment-current-field">
+                <input
+                  id="employment-is-current"
+                  name="isCurrent"
+                  type="checkbox"
+                  aria-controls="employment-end-date"
+                  aria-describedby="employment-is-current-help employment-is-current-error"
+                >
+                <label for="employment-is-current">This is my current role</label>
+                <p class="profile-field-help" id="employment-is-current-help">When selected, the end date is disabled and saved with no end date.</p>
+                <p class="profile-field-error" id="employment-is-current-error" hidden></p>
+              </div>
+
+              <div class="profile-field employment-responsibilities-field">
+                <label for="employment-responsibilities">Responsibilities</label>
+                <textarea
+                  id="employment-responsibilities"
+                  name="responsibilities"
+                  rows="4"
+                  aria-describedby="employment-responsibilities-help employment-responsibilities-error"
+                ></textarea>
+                <p class="profile-field-help" id="employment-responsibilities-help">Enter one responsibility per line. Blank lines are ignored.</p>
+                <p class="profile-field-error" id="employment-responsibilities-error" hidden></p>
+              </div>
+            </div>
+
+            <div class="profile-form-actions">
+              <button class="profile-submit" id="employment-submit" type="submit">Save employment</button>
+              <button class="employment-cancel" id="employment-cancel" type="button">Cancel</button>
+            </div>
+          </form>
+        </dialog>
+
+        <dialog
+          class="employment-delete-dialog"
+          id="employment-delete-dialog"
+          aria-labelledby="employment-delete-dialog-title"
+          aria-describedby="employment-delete-dialog-description"
+        >
+          <h2 id="employment-delete-dialog-title">Delete employment record?</h2>
+          <div id="employment-delete-dialog-description">
+            <p>
+              Delete <strong id="employment-delete-record-name">this employment record</strong>.
+              Linked achievements will remain but become unlinked.
+            </p>
+            <p>
+              Linked achievements currently marked Verified will become Unverified.
+              Other achievement content will remain unchanged.
+            </p>
+          </div>
+          <div class="employment-delete-dialog-actions">
+            <button class="employment-cancel" id="employment-delete-cancel" type="button">
+              Cancel
+            </button>
+            <button class="employment-action employment-action--delete" id="employment-delete-confirm" type="button">
+              Delete employment
+            </button>
+          </div>
         </dialog>
 
         <section

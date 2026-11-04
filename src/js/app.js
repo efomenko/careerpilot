@@ -89,8 +89,14 @@ const profileFieldErrors = {
 const profileFields = Object.keys(profileControls);
 let profileFormSnapshot = "";
 const employmentForm = document.querySelector("#employment-form");
+const employmentDialog = document.querySelector("#employment-dialog");
 const employmentList = document.querySelector("#employment-list");
 const employmentEmpty = document.querySelector("#employment-empty");
+const employmentAddAction = document.querySelector("#employment-add-action");
+const employmentDeleteDialog = document.querySelector("#employment-delete-dialog");
+const employmentDeleteRecordName = document.querySelector("#employment-delete-record-name");
+const employmentDeleteCancel = document.querySelector("#employment-delete-cancel");
+const employmentDeleteConfirm = document.querySelector("#employment-delete-confirm");
 const employmentFormTitle = document.querySelector("#employment-form-title");
 const employmentSubmit = document.querySelector("#employment-submit");
 const employmentCancel = document.querySelector("#employment-cancel");
@@ -112,6 +118,9 @@ const employmentFieldErrors = {
 };
 const employmentFields = Object.keys(employmentControls);
 let editingEmploymentId = null;
+let employmentFormSnapshot = "";
+let pendingEmploymentDeletion = null;
+let isDeletingEmployment = false;
 const achievementForm = document.querySelector("#achievement-form");
 const achievementList = document.querySelector("#achievement-list");
 const achievementEmpty = document.querySelector("#achievement-empty");
@@ -387,9 +396,54 @@ function resetEmploymentForm() {
   editingEmploymentId = null;
   employmentFormTitle.textContent = "Add employment";
   employmentSubmit.textContent = "Add employment";
-  employmentCancel.hidden = true;
   employmentControls.endDate.disabled = false;
   clearEmploymentFieldErrors();
+}
+
+function populateEmploymentForm(record) {
+  employmentControls.employer.value = record?.employer ?? "";
+  employmentControls.roleTitle.value = record?.roleTitle ?? "";
+  employmentControls.startDate.value = record?.startDate ?? "";
+  employmentControls.endDate.value = record?.endDate ?? "";
+  employmentControls.isCurrent.checked = record?.isCurrent ?? false;
+  employmentControls.endDate.disabled = employmentControls.isCurrent.checked;
+  employmentControls.responsibilities.value = record?.responsibilities.join("\n") ?? "";
+  employmentFormTitle.textContent = record
+    ? `Edit ${record.roleTitle}`
+    : "Add employment";
+  employmentSubmit.textContent = record ? "Save changes" : "Add employment";
+}
+
+function getEmploymentFormSnapshot() {
+  return JSON.stringify(
+    employmentFields.map((field) => field === "isCurrent"
+      ? employmentControls[field].checked
+      : employmentControls[field].value)
+  );
+}
+
+function openEmploymentDialog({ invoker, record = null }) {
+  editingEmploymentId = record?.id ?? null;
+  populateEmploymentForm(record);
+  clearEmploymentFieldErrors();
+  employmentFormSnapshot = getEmploymentFormSnapshot();
+
+  dialogManager.open(employmentDialog, {
+    invoker,
+    initialFocus: employmentControls.employer,
+    isDirty: () => getEmploymentFormSnapshot() !== employmentFormSnapshot,
+    onDiscard() {
+      const savedRecord = editingEmploymentId === null
+        ? null
+        : careerState.getEmploymentRecords()
+          .find((item) => item.id === editingEmploymentId) ?? null;
+
+      editingEmploymentId = savedRecord?.id ?? null;
+      populateEmploymentForm(savedRecord);
+      clearEmploymentFieldErrors();
+      employmentFormSnapshot = getEmploymentFormSnapshot();
+    }
+  });
 }
 
 function renderEmploymentRecords() {
@@ -400,6 +454,7 @@ function renderEmploymentRecords() {
   records.forEach((record) => {
     const article = document.createElement("article");
     article.className = "employment-record";
+    article.dataset.employmentId = record.id;
     article.setAttribute("role", "listitem");
 
     const heading = document.createElement("h3");
@@ -440,14 +495,16 @@ function renderEmploymentRecords() {
     editButton.type = "button";
     editButton.textContent = "Edit";
     editButton.setAttribute("aria-label", `Edit ${record.roleTitle} at ${record.employer}`);
-    editButton.addEventListener("click", () => beginEmploymentEdit(record));
+    editButton.addEventListener("click", () => beginEmploymentEdit(record, editButton));
 
     const deleteButton = document.createElement("button");
     deleteButton.className = "employment-action employment-action--delete";
     deleteButton.type = "button";
     deleteButton.textContent = "Delete";
     deleteButton.setAttribute("aria-label", `Delete ${record.roleTitle} at ${record.employer}`);
-    deleteButton.addEventListener("click", () => deleteEmploymentRecord(record));
+    deleteButton.addEventListener("click", () =>
+      openEmploymentDeleteDialog(record, deleteButton)
+    );
 
     actions.append(editButton, deleteButton);
     article.append(actions);
@@ -455,20 +512,18 @@ function renderEmploymentRecords() {
   });
 }
 
-function beginEmploymentEdit(record) {
-  clearEmploymentFieldErrors();
-  editingEmploymentId = record.id;
-  employmentControls.employer.value = record.employer;
-  employmentControls.roleTitle.value = record.roleTitle;
-  employmentControls.startDate.value = record.startDate;
-  employmentControls.endDate.value = record.endDate || "";
-  employmentControls.isCurrent.checked = record.isCurrent;
-  employmentControls.endDate.disabled = record.isCurrent;
-  employmentControls.responsibilities.value = record.responsibilities.join("\n");
-  employmentFormTitle.textContent = `Edit ${record.roleTitle}`;
-  employmentSubmit.textContent = "Save changes";
-  employmentCancel.hidden = false;
-  employmentControls.employer.focus();
+function beginEmploymentEdit(record, invoker) {
+  openEmploymentDialog({ invoker, record });
+}
+
+function focusEmploymentEditAction(recordId) {
+  const record = [...employmentList.querySelectorAll(".employment-record")]
+    .find((item) => item.dataset.employmentId === recordId);
+  const editAction = record?.querySelector(
+    ".employment-action:not(.employment-action--delete)"
+  );
+
+  (editAction ?? employmentAddAction).focus();
 }
 
 function showEmploymentValidationErrors(errors) {
@@ -550,26 +605,28 @@ function saveEmploymentRecord(event) {
     return;
   }
 
+  const existingId = editingEmploymentId;
   try {
-    if (editingEmploymentId) {
-      careerState.updateEmploymentRecord(
-        editingEmploymentId,
+    const savedRecord = existingId !== null
+      ? careerState.updateEmploymentRecord(
+        existingId,
         input,
         new Date().toISOString()
-      );
-      notifications.show("success", "Employment record updated.");
-    } else {
-      careerState.addEmploymentRecord(input, {
+      )
+      : careerState.addEmploymentRecord(input, {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       });
-      notifications.show("success", "Employment record added.");
-    }
 
     dialogManager.closeAfterMutation();
     resetEmploymentForm();
     renderEmploymentRecords();
     renderAchievementRecords();
+    notifications.show(
+      "success",
+      existingId !== null ? "Employment record updated." : "Employment record added."
+    );
+    focusEmploymentEditAction(savedRecord.id);
   } catch (error) {
     if (Array.isArray(error.errors)) {
       showEmploymentValidationErrors(error.errors);
@@ -582,23 +639,77 @@ function saveEmploymentRecord(event) {
   }
 }
 
-function deleteEmploymentRecord(record) {
+function openEmploymentDeleteDialog(record, invoker) {
+  if (
+    dialogManager.isOpen()
+    || employmentDialog.open
+    || employmentDeleteDialog.open
+  ) {
+    return;
+  }
+
+  const records = careerState.getEmploymentRecords();
+  const recordIndex = records.findIndex((item) => item.id === record.id);
+  if (recordIndex === -1) {
+    notifications.show("error", "The employment record could not be found.");
+    return;
+  }
+
+  pendingEmploymentDeletion = {
+    id: record.id,
+    focusRecordId: records[recordIndex + 1]?.id
+      ?? records[recordIndex - 1]?.id
+      ?? null
+  };
+  employmentDeleteRecordName.textContent = `${record.roleTitle} at ${record.employer}`;
+
   try {
-    careerState.deleteEmploymentRecord(record.id);
-    dialogManager.closeAfterMutation();
-    renderEmploymentRecords();
-    renderAchievementRecords();
-    if (editingEmploymentId === record.id) {
-      resetEmploymentForm();
-    }
-    notifications.show("success", "Employment record deleted.");
-    document.querySelector("#employment-title").focus();
+    dialogManager.open(employmentDeleteDialog, {
+      invoker,
+      initialFocus: employmentDeleteCancel,
+      isDirty: () => false
+    });
   } catch (error) {
+    pendingEmploymentDeletion = null;
+    notifications.show(
+      "error",
+      error.message || "The employment deletion confirmation could not be opened."
+    );
+  }
+}
+
+function confirmEmploymentDeletion() {
+  const pendingDeletion = pendingEmploymentDeletion;
+  if (
+    !pendingDeletion
+    || !employmentDeleteDialog.open
+    || isDeletingEmployment
+  ) {
+    return;
+  }
+
+  isDeletingEmployment = true;
+  try {
+    careerState.deleteEmploymentRecord(pendingDeletion.id);
+  } catch (error) {
+    isDeletingEmployment = false;
     notifications.show(
       "error",
       error.message || "The employment record could not be deleted."
     );
+    return;
   }
+
+  pendingEmploymentDeletion = null;
+  isDeletingEmployment = false;
+  dialogManager.closeAfterMutation();
+  renderEmploymentRecords();
+  renderAchievementRecords();
+  if (editingEmploymentId === pendingDeletion.id) {
+    resetEmploymentForm();
+  }
+  notifications.show("success", "Employment record deleted.");
+  focusEmploymentEditAction(pendingDeletion.focusRecordId);
 }
 
 function clearAchievementFieldErrors() {
@@ -1222,6 +1333,10 @@ profileForm.addEventListener("input", (event) => {
   }
 });
 
+employmentAddAction.addEventListener("click", () => {
+  resetEmploymentForm();
+  openEmploymentDialog({ invoker: employmentAddAction });
+});
 employmentForm.addEventListener("submit", saveEmploymentRecord);
 employmentForm.addEventListener("input", (event) => {
   const field = employmentFields.find((item) => employmentControls[item] === event.target);
@@ -1236,9 +1351,18 @@ employmentControls.isCurrent.addEventListener("change", () => {
   clearFieldError(employmentControls.isCurrent, employmentFieldErrors.isCurrent);
 });
 employmentCancel.addEventListener("click", () => {
-  resetEmploymentForm();
-  employmentControls.employer.focus();
+  dialogManager.requestClose();
 });
+employmentDeleteDialog.addEventListener("cancel", () => {
+  if (!isDeletingEmployment) {
+    pendingEmploymentDeletion = null;
+  }
+});
+employmentDeleteCancel.addEventListener("click", () => {
+  dialogManager.requestClose();
+  pendingEmploymentDeletion = null;
+});
+employmentDeleteConfirm.addEventListener("click", confirmEmploymentDeletion);
 
 achievementForm.addEventListener("submit", saveAchievementRecord);
 achievementForm.addEventListener("input", (event) => {
