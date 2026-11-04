@@ -87,6 +87,19 @@
 
       <main id="main-content" class="main-content" tabindex="-1">
         <div
+          class="ordinary-notification"
+          id="ordinary-notification"
+          hidden
+        >
+          <span class="ordinary-notification__message"></span>
+          <button
+            class="ordinary-notification__dismiss"
+            type="button"
+            aria-label="Dismiss notification"
+          >Dismiss</button>
+        </div>
+
+        <div
           class="persistence-status"
           id="persistence-status"
           role="status"
@@ -96,6 +109,28 @@
         >
           <p class="persistence-status__message" id="persistence-persistent-warning" hidden></p>
           <p class="persistence-status__message" id="persistence-transient-warning" hidden></p>
+        </div>
+
+        <div
+          class="discard-confirmation"
+          id="discard-confirmation"
+          role="group"
+          aria-labelledby="discard-confirmation-title"
+          aria-describedby="discard-confirmation-description"
+          hidden
+        >
+          <h2 id="discard-confirmation-title">Discard unsaved changes?</h2>
+          <p id="discard-confirmation-description">
+            Your changes will be lost if you discard them.
+          </p>
+          <div class="discard-confirmation__actions">
+            <button class="discard-confirmation__continue" id="continue-editing" type="button">
+              Continue editing
+            </button>
+            <button class="discard-confirmation__discard" id="discard-changes" type="button">
+              Discard changes
+            </button>
+          </div>
         </div>
 
         <section
@@ -257,7 +292,6 @@
               <div class="profile-form-actions">
                 <button class="profile-submit" type="submit">Save profile</button>
               </div>
-              <p class="profile-feedback" id="profile-feedback" hidden></p>
             </form>
           </div>
 
@@ -278,8 +312,6 @@
               aria-live="polite"
             ></div>
             <p class="employment-empty" id="employment-empty">No employment records yet. Add your first role below.</p>
-            <p class="employment-feedback" id="employment-feedback" hidden></p>
-
             <form class="employment-form" id="employment-form" novalidate>
               <h3 class="employment-form-title" id="employment-form-title">Add employment</h3>
 
@@ -401,8 +433,6 @@
             <p class="achievement-empty" id="achievement-empty">
               No achievements yet. Add your first achievement below.
             </p>
-            <p class="achievement-feedback" id="achievement-feedback" hidden></p>
-
             <form class="achievement-form" id="achievement-form" novalidate>
               <h2 class="achievement-form-title" id="achievement-form-title">
                 Add achievement

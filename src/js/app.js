@@ -1,6 +1,8 @@
 
 import { createCareerPersistence } from "./career-persistence.js";
-import { clearFeedback, clearFieldError, showFeedback, showFieldError } from "./feedback.js";
+import { createDialogManager } from "./dialogs.js";
+import { createNotifications } from "./notifications.js";
+import { clearFieldError, showFieldError } from "./feedback.js";
 import { validateRequired } from "./validation.js";
 
 const appStatus = document.querySelector("#app-status");
@@ -44,6 +46,16 @@ const careerPersistence = createCareerPersistence(browserStorage, {
 const careerState = careerPersistence.state;
 renderPersistenceStatus(careerPersistence.getStatus());
 
+const notifications = createNotifications({
+  region: document.querySelector("#ordinary-notification")
+});
+const dialogManager = createDialogManager({
+  discardDialog: document.querySelector("#discard-confirmation"),
+  continueEditingButton: document.querySelector("#continue-editing"),
+  discardChangesButton: document.querySelector("#discard-changes"),
+  fallbackFocus: document.querySelector("#main-content")
+});
+
 const sidebar = document.querySelector("#sidebar");
 const menuToggle = document.querySelector("#menu-toggle");
 const currentSection = document.querySelector("#current-section");
@@ -51,7 +63,6 @@ const pageTitle = document.querySelector("#page-title");
 const navigationLinks = document.querySelectorAll("[data-view]");
 const pageViews = document.querySelectorAll("[data-page-view]");
 const profileForm = document.querySelector("#profile-form");
-const profileFeedback = document.querySelector("#profile-feedback");
 const profileControls = {
   fullName: document.querySelector("#profile-full-name"),
   headline: document.querySelector("#profile-headline"),
@@ -68,7 +79,6 @@ const profileFields = Object.keys(profileControls);
 const employmentForm = document.querySelector("#employment-form");
 const employmentList = document.querySelector("#employment-list");
 const employmentEmpty = document.querySelector("#employment-empty");
-const employmentFeedback = document.querySelector("#employment-feedback");
 const employmentFormTitle = document.querySelector("#employment-form-title");
 const employmentSubmit = document.querySelector("#employment-submit");
 const employmentCancel = document.querySelector("#employment-cancel");
@@ -93,7 +103,6 @@ let editingEmploymentId = null;
 const achievementForm = document.querySelector("#achievement-form");
 const achievementList = document.querySelector("#achievement-list");
 const achievementEmpty = document.querySelector("#achievement-empty");
-const achievementFeedback = document.querySelector("#achievement-feedback");
 const achievementFormTitle = document.querySelector("#achievement-form-title");
 const achievementSubmit = document.querySelector("#achievement-submit");
 const achievementCancel = document.querySelector("#achievement-cancel");
@@ -230,7 +239,6 @@ function createRecordId() {
 function saveProfile(event) {
   event.preventDefault();
   clearProfileFieldErrors();
-  clearFeedback(profileFeedback);
 
   const input = readProfileForm();
   const requiredName = validateRequired(input.fullName, "your full name");
@@ -241,7 +249,7 @@ function saveProfile(event) {
       profileFieldErrors.fullName,
       requiredName.message
     );
-    showFeedback(profileFeedback, "error", requiredName.message);
+    notifications.show("error", requiredName.message);
     profileControls.fullName.focus();
     return;
   }
@@ -256,9 +264,9 @@ function saveProfile(event) {
         createdAt: new Date().toISOString()
       });
 
+    dialogManager.closeAfterMutation();
     populateProfileForm(profile);
-    showFeedback(
-      profileFeedback,
+    notifications.show(
       "success",
       existingProfile ? "Profile updated." : "Profile created."
     );
@@ -268,7 +276,7 @@ function saveProfile(event) {
     }
 
     const message = error.message || "The profile could not be saved.";
-    showFeedback(profileFeedback, "error", message);
+    notifications.show("error", message);
   }
 }
 
@@ -352,7 +360,6 @@ function renderEmploymentRecords() {
 }
 
 function beginEmploymentEdit(record) {
-  clearFeedback(employmentFeedback);
   clearEmploymentFieldErrors();
   editingEmploymentId = record.id;
   employmentControls.employer.value = record.employer;
@@ -419,7 +426,6 @@ function readEmploymentForm() {
 function saveEmploymentRecord(event) {
   event.preventDefault();
   clearEmploymentFieldErrors();
-  clearFeedback(employmentFeedback);
 
   const input = readEmploymentForm();
   const employerRequired = validateRequired(input.employer, "an employer");
@@ -441,7 +447,7 @@ function saveEmploymentRecord(event) {
   });
 
   if (!employerRequired.valid || !roleRequired.valid || !startDateRequired.valid) {
-    showFeedback(employmentFeedback, "error", "Enter an employer, role title, and start date.");
+    notifications.show("error", "Enter an employer, role title, and start date.");
     const firstInvalid = [employerRequired, roleRequired, startDateRequired]
       .findIndex((result) => !result.valid);
     employmentControls[["employer", "roleTitle", "startDate"][firstInvalid]].focus();
@@ -455,15 +461,16 @@ function saveEmploymentRecord(event) {
         input,
         new Date().toISOString()
       );
-      showFeedback(employmentFeedback, "success", "Employment record updated.");
+      notifications.show("success", "Employment record updated.");
     } else {
       careerState.addEmploymentRecord(input, {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       });
-      showFeedback(employmentFeedback, "success", "Employment record added.");
+      notifications.show("success", "Employment record added.");
     }
 
+    dialogManager.closeAfterMutation();
     resetEmploymentForm();
     renderEmploymentRecords();
     renderAchievementRecords();
@@ -472,8 +479,7 @@ function saveEmploymentRecord(event) {
       showEmploymentValidationErrors(error.errors);
     }
 
-    showFeedback(
-      employmentFeedback,
+    notifications.show(
       "error",
       error.message || "The employment record could not be saved."
     );
@@ -481,20 +487,18 @@ function saveEmploymentRecord(event) {
 }
 
 function deleteEmploymentRecord(record) {
-  clearFeedback(employmentFeedback);
-
   try {
     careerState.deleteEmploymentRecord(record.id);
+    dialogManager.closeAfterMutation();
     renderEmploymentRecords();
     renderAchievementRecords();
     if (editingEmploymentId === record.id) {
       resetEmploymentForm();
     }
-    showFeedback(employmentFeedback, "success", "Employment record deleted.");
+    notifications.show("success", "Employment record deleted.");
     document.querySelector("#employment-title").focus();
   } catch (error) {
-    showFeedback(
-      employmentFeedback,
+    notifications.show(
       "error",
       error.message || "The employment record could not be deleted."
     );
@@ -583,7 +587,6 @@ function addAchievementAction(value = "") {
     row.remove();
     renumberAchievementEntries(achievementActions, "Action", "Remove action");
     clearAchievementFieldErrors();
-    clearFeedback(achievementFeedback);
     document.querySelector("#achievement-add-action").focus();
   });
   row.append(remove);
@@ -634,7 +637,6 @@ function addAchievementMetric(metric = {}) {
   remove.addEventListener("click", () => {
     row.remove();
     clearAchievementFieldErrors();
-    clearFeedback(achievementFeedback);
     document.querySelector("#achievement-add-metric").focus();
   });
 
@@ -665,7 +667,6 @@ function addAchievementEvidence(value = "") {
     row.remove();
     renumberAchievementEntries(achievementEvidence, "Evidence entry", "Remove evidence entry");
     clearAchievementFieldErrors();
-    clearFeedback(achievementFeedback);
     document.querySelector("#achievement-add-evidence").focus();
   });
   row.append(remove);
@@ -769,24 +770,21 @@ function getAchievementVerificationLabel(status) {
 }
 
 function updateAchievementVerificationStatus(recordId, select) {
-  clearFeedback(achievementFeedback);
-
   try {
     const updatedRecord = careerState.updateAchievementVerificationStatus(
       recordId,
       select.value,
       new Date().toISOString()
     );
+    dialogManager.closeAfterMutation();
     renderAchievementRecords();
-    showFeedback(
-      achievementFeedback,
+    notifications.show(
       "success",
       `Verification status updated to ${getAchievementVerificationLabel(updatedRecord.verificationStatus)}.`
     );
   } catch (error) {
     renderAchievementRecords();
-    showFeedback(
-      achievementFeedback,
+    notifications.show(
       "error",
       error.message || "The verification status could not be updated."
     );
@@ -961,7 +959,6 @@ function resetAchievementForm() {
 }
 
 function beginAchievementEdit(record) {
-  clearFeedback(achievementFeedback);
   resetAchievementForm();
   editingAchievementId = record.id;
   achievementControls.title.value = record.title;
@@ -1030,7 +1027,6 @@ function readAchievementForm() {
 function saveAchievementRecord(event) {
   event.preventDefault();
   clearAchievementFieldErrors();
-  clearFeedback(achievementFeedback);
 
   try {
     const input = readAchievementForm();
@@ -1055,16 +1051,16 @@ function saveAchievementRecord(event) {
       successMessage = "Achievement added.";
     }
 
+    dialogManager.closeAfterMutation();
     resetAchievementForm();
     renderAchievementRecords();
-    showFeedback(achievementFeedback, "success", successMessage);
+    notifications.show("success", successMessage);
   } catch (error) {
     if (Array.isArray(error.errors)) {
       showAchievementValidationErrors(error.errors);
     }
 
-    showFeedback(
-      achievementFeedback,
+    notifications.show(
       "error",
       error.message || "The achievement could not be saved."
     );
@@ -1072,19 +1068,17 @@ function saveAchievementRecord(event) {
 }
 
 function deleteAchievementRecord(record) {
-  clearFeedback(achievementFeedback);
-
   try {
     careerState.deleteAchievementRecord(record.id);
+    dialogManager.closeAfterMutation();
     if (editingAchievementId === record.id) {
       resetAchievementForm();
     }
     renderAchievementRecords();
-    showFeedback(achievementFeedback, "success", "Achievement deleted.");
+    notifications.show("success", "Achievement deleted.");
     document.querySelector("#achievements-title").focus();
   } catch (error) {
-    showFeedback(
-      achievementFeedback,
+    notifications.show(
       "error",
       error.message || "The achievement could not be deleted."
     );
@@ -1097,7 +1091,6 @@ profileForm.addEventListener("input", (event) => {
 
   if (field) {
     clearFieldError(profileControls[field], profileFieldErrors[field]);
-    clearFeedback(profileFeedback);
   }
 });
 
@@ -1107,7 +1100,6 @@ employmentForm.addEventListener("input", (event) => {
 
   if (field) {
     clearFieldError(employmentControls[field], employmentFieldErrors[field]);
-    clearFeedback(employmentFeedback);
   }
 });
 employmentControls.isCurrent.addEventListener("change", () => {
@@ -1117,7 +1109,6 @@ employmentControls.isCurrent.addEventListener("change", () => {
 });
 employmentCancel.addEventListener("click", () => {
   resetEmploymentForm();
-  clearFeedback(employmentFeedback);
   employmentControls.employer.focus();
 });
 
@@ -1129,7 +1120,6 @@ achievementForm.addEventListener("input", (event) => {
 
   if (control && error) {
     clearFieldError(control, error);
-    clearFeedback(achievementFeedback);
   }
 });
 achievementForm.addEventListener("change", (event) => {
@@ -1139,24 +1129,19 @@ achievementForm.addEventListener("change", (event) => {
 
   if (control && error) {
     clearFieldError(control, error);
-    clearFeedback(achievementFeedback);
   }
 });
 document.querySelector("#achievement-add-action").addEventListener("click", () => {
   addAchievementAction();
-  clearFeedback(achievementFeedback);
 });
 document.querySelector("#achievement-add-metric").addEventListener("click", () => {
   addAchievementMetric();
-  clearFeedback(achievementFeedback);
 });
 document.querySelector("#achievement-add-evidence").addEventListener("click", () => {
   addAchievementEvidence();
-  clearFeedback(achievementFeedback);
 });
 achievementCancel.addEventListener("click", () => {
   resetAchievementForm();
-  clearFeedback(achievementFeedback);
   achievementControls.title.focus();
 });
 
@@ -1209,6 +1194,12 @@ function navigateTo(viewName) {
   }
 
   const menuWasOpen = sidebar.classList.contains("is-open");
+  const viewChanged = ![...pageViews].some((page) =>
+    !page.hidden && page.dataset.pageView === viewName
+  );
+  if (viewChanged) {
+    notifications.clearSuccess();
+  }
 
   navigationLinks.forEach((link) => {
     const isActive = link.dataset.view === viewName;
@@ -1288,7 +1279,11 @@ sidebar.addEventListener("transitionend", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && sidebar.classList.contains("is-open")) {
+  if (
+    event.key === "Escape"
+    && !dialogManager.isOpen()
+    && sidebar.classList.contains("is-open")
+  ) {
     closeMobileMenu(true);
   }
 });
