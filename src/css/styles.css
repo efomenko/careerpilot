@@ -8,7 +8,7 @@
   text-rendering: optimizeLegibility;
 
   --color-text: #25243a;
-  --color-muted: #77778d;
+  --color-muted: #656579;
   --color-border: #e9e8f1;
   --color-surface: #ffffff;
   --color-primary: #6855dc;
@@ -44,7 +44,7 @@ a {
 /* Keep keyboard focus visible so users can tell which control is selected. */
 button:focus-visible,
 a:focus-visible {
-  outline: 3px solid #9d91ff;
+  outline: 3px solid #5140bd;
   outline-offset: 3px;
 }
 
@@ -87,7 +87,7 @@ a:focus-visible {
 
 .nav-heading {
   margin: 44px 10px 12px;
-  color: #9b9aad;
+  color: var(--color-muted);
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 1.5px;
@@ -140,7 +140,7 @@ a:focus-visible {
 }
 
 .version-label {
-  color: #9b9aad;
+  color: var(--color-muted);
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 1px;
@@ -278,7 +278,7 @@ a:focus-visible {
   overflow: hidden;
   padding: 36px;
   color: #fff;
-  background: linear-gradient(120deg, #5543c6, #8066e8);
+  background: linear-gradient(120deg, #5543c6, #634bc1);
   border-radius: 22px;
   box-shadow: 0 12px 30px rgb(87 67 198 / 14%);
 }
@@ -394,7 +394,7 @@ a:focus-visible {
 }
 
 .card-label {
-  color: #89879c;
+  color: var(--color-muted);
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 1px;
@@ -539,7 +539,7 @@ a:focus-visible {
 
 .ordinary-notification__dismiss:focus-visible,
 .discard-confirmation button:focus-visible {
-  outline: 3px solid #9d91ff;
+  outline: 3px solid #5140bd;
   outline-offset: 3px;
 }
 
@@ -625,7 +625,7 @@ a:focus-visible {
   justify-content: space-between;
   gap: 12px;
   padding: 18px 36px 24px;
-  color: #9694a8;
+  color: var(--color-muted);
   font-size: 10px;
 }
 
@@ -682,13 +682,13 @@ a:focus-visible {
   padding: 10px 12px;
   color: var(--color-text);
   background: #fff;
-  border: 1px solid #aaa8bd;
+  border: 1px solid #89879c;
   border-radius: 8px;
   font: inherit;
 }
 
 .validation-demo__field input:focus-visible {
-  outline: 3px solid #9d91ff;
+  outline: 3px solid #5140bd;
   outline-offset: 3px;
 }
 
@@ -736,7 +736,7 @@ a:focus-visible {
 }
 
 .validation-demo__actions button:focus-visible {
-  outline: 3px solid #9d91ff;
+  outline: 3px solid #5140bd;
   outline-offset: 3px;
 }
 
@@ -919,7 +919,7 @@ a:focus-visible {
 
 .employment-action:focus-visible,
 .employment-cancel:focus-visible {
-  outline: 3px solid #9d91ff;
+  outline: 3px solid #5140bd;
   outline-offset: 3px;
 }
 
@@ -1075,7 +1075,7 @@ a:focus-visible {
   padding: 10px 12px;
   color: var(--color-text);
   background: #fff;
-  border: 1px solid #aaa8bd;
+  border: 1px solid #89879c;
   border-radius: 8px;
   font: inherit;
 }
@@ -1096,7 +1096,7 @@ a:focus-visible {
 .profile-field input:focus-visible,
 .profile-field textarea:focus-visible,
 .profile-submit:focus-visible {
-  outline: 3px solid #9d91ff;
+  outline: 3px solid #5140bd;
   outline-offset: 3px;
 }
 
@@ -1292,7 +1292,7 @@ a:focus-visible {
   padding: 8px 10px;
   color: var(--color-text);
   background: #fff;
-  border: 1px solid #aaa8bd;
+  border: 1px solid #89879c;
   border-radius: 8px;
   font: inherit;
   font-size: 13px;
@@ -1390,7 +1390,7 @@ a:focus-visible {
 .achievement-field input:focus-visible,
 .achievement-field textarea:focus-visible,
 .achievement-field select:focus-visible {
-  outline: 3px solid #9d91ff;
+  outline: 3px solid #5140bd;
   outline-offset: 3px;
 }
 
@@ -1494,7 +1494,7 @@ a:focus-visible {
   padding: 10px 12px;
   color: var(--color-text);
   background: #fff;
-  border: 1px solid #aaa8bd;
+  border: 1px solid #89879c;
   border-radius: 8px;
   font: inherit;
 }
