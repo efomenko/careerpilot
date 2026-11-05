@@ -3,6 +3,8 @@ import { createCareerPersistence } from "./career-persistence.js";
 import { createDialogManager } from "./dialogs.js";
 import { createNavigationController } from "./navigation.js";
 import { createNotifications } from "./notifications.js";
+import { createJobRecord } from "./job-model.js";
+import { getJobListResults } from "./job-ui-helpers.js";
 import { clearFieldError, showFieldError } from "./feedback.js";
 import { validateRequired } from "./validation.js";
 
@@ -138,6 +140,55 @@ const achievementActions = document.querySelector("#achievement-actions");
 const achievementMetrics = document.querySelector("#achievement-metrics");
 const achievementEvidence = document.querySelector("#achievement-evidence");
 const achievementEmployment = document.querySelector("#achievement-employment");
+const jobList = document.querySelector("#job-list");
+const jobFilter = document.querySelector("#job-filter");
+const jobEmpty = document.querySelector("#job-empty");
+const jobEmptyMessage = document.querySelector("#job-empty-message");
+const jobFilterEmpty = document.querySelector("#job-filter-empty");
+const jobSearchInput = document.querySelector("#job-search-input");
+const jobSearchClear = document.querySelector("#job-search-clear");
+const jobSearchEmpty = document.querySelector("#job-search-empty");
+const jobSearchEmptyClear = document.querySelector("#job-search-empty-clear");
+const jobResultCount = document.querySelector("#job-result-count");
+const jobListPanel = document.querySelector("#job-list-panel");
+const jobDialog = document.querySelector("#job-dialog");
+const jobForm = document.querySelector("#job-form");
+const jobCreateAction = document.querySelector("#job-create-action");
+const jobEmptyCreateAction = document.querySelector("#job-empty-create-action");
+const jobEditAction = document.querySelector("#job-edit-action");
+const jobDetailPanel = document.querySelector("#job-detail-panel");
+const jobBackAction = document.querySelector("#job-back-action");
+const jobArchiveAction = document.querySelector("#job-archive-action");
+const jobDetailTitle = document.querySelector("#job-detail-title");
+const jobDetailCompany = document.querySelector("#job-detail-company");
+const jobDetailStatus = document.querySelector("#job-detail-status");
+const jobDetailDescription = document.querySelector("#job-detail-description");
+const jobDetailSourceUrl = document.querySelector("#job-detail-source-url");
+const jobDetailNotes = document.querySelector("#job-detail-notes");
+const jobDetailCreated = document.querySelector("#job-detail-created");
+const jobDetailUpdated = document.querySelector("#job-detail-updated");
+const jobDeleteAction = document.querySelector("#job-delete-action");
+const jobDeleteDialog = document.querySelector("#job-delete-dialog");
+const jobDeleteCancel = document.querySelector("#job-delete-cancel");
+const jobDeleteConfirm = document.querySelector("#job-delete-confirm");
+const jobFormTitle = document.querySelector("#job-form-title");
+const jobSubmit = document.querySelector("#job-submit");
+const jobCancel = document.querySelector("#job-cancel");
+const jobControls = {
+  company: document.querySelector("#job-company"),
+  roleTitle: document.querySelector("#job-role-title"),
+  description: document.querySelector("#job-description"),
+  sourceUrl: document.querySelector("#job-source-url"),
+  notes: document.querySelector("#job-notes")
+};
+const jobFieldErrors = {
+  company: document.querySelector("#job-company-error"),
+  roleTitle: document.querySelector("#job-role-title-error"),
+  description: document.querySelector("#job-description-error"),
+  sourceUrl: document.querySelector("#job-source-url-error"),
+  notes: document.querySelector("#job-notes-error")
+};
+const jobFields = Object.keys(jobControls);
 const achievementControls = {
   title: document.querySelector("#achievement-title"),
   context: document.querySelector("#achievement-context"),
@@ -157,6 +208,11 @@ let achievementErrorTargets = {};
 let achievementFormSnapshot = "";
 let pendingAchievementDeletion = null;
 let isDeletingAchievement = false;
+let selectedJobStatus = "active";
+let editingJobId = null;
+let jobFormSnapshot = "";
+let pendingJobDeletionId = null;
+let isDeletingJob = false;
 
 // Each view supplies the label and status shown when its hash is selected.
 const views = {
@@ -542,6 +598,381 @@ function renderEmploymentRecords() {
     article.append(actions);
     employmentList.append(article);
   });
+}
+
+function renderJobRecords() {
+  const records = careerState.getJobs();
+  const {
+    statusRecords,
+    matchingRecords,
+    normalizedQuery: searchQuery
+  } = getJobListResults(records, selectedJobStatus, jobSearchInput.value);
+
+  jobList.replaceChildren();
+  matchingRecords.forEach((record) => {
+    const article = document.createElement("article");
+    article.className = "job-record";
+    article.dataset.jobId = record.id;
+    article.setAttribute("role", "listitem");
+
+    const openButton = document.createElement("button");
+    openButton.className = "job-record-open";
+    openButton.type = "button";
+    openButton.setAttribute(
+      "aria-label",
+      `Open ${record.roleTitle} at ${record.company}`
+    );
+    openButton.addEventListener("click", () => openJobDetail(record.id));
+
+    const main = document.createElement("span");
+    main.className = "job-record-main";
+
+    const company = document.createElement("span");
+    company.className = "job-record-company";
+    company.textContent = record.company;
+
+    const roleTitle = document.createElement("span");
+    roleTitle.className = "job-record-title";
+    roleTitle.textContent = record.roleTitle;
+
+    const status = document.createElement("span");
+    status.className = "job-record-status";
+    const statusBadge = document.createElement("span");
+    statusBadge.className = record.status === "archived"
+      ? "job-status job-status--archived"
+      : "job-status";
+    statusBadge.textContent = record.status === "archived" ? "Archived" : "Active";
+    status.append(statusBadge);
+
+    main.append(company, roleTitle);
+    openButton.append(main, status);
+    article.append(openButton);
+    jobList.append(article);
+  });
+
+  const hasJobs = records.length > 0;
+  const hasStatusJobs = statusRecords.length > 0;
+  const hasMatchingJobs = matchingRecords.length > 0;
+  jobSearchClear.hidden = searchQuery.length === 0;
+  jobSearchEmpty.hidden = !searchQuery || hasMatchingJobs;
+  jobEmpty.hidden = hasJobs || Boolean(searchQuery);
+  jobFilterEmpty.hidden = !hasJobs || hasStatusJobs || Boolean(searchQuery);
+  jobResultCount.textContent = `${matchingRecords.length} ${matchingRecords.length === 1 ? "job" : "jobs"} found`;
+  if (!searchQuery && !hasStatusJobs && hasJobs) {
+    const statusName = selectedJobStatus === "archived" ? "archived" : "active";
+    jobFilterEmpty.textContent = `No ${statusName} Jobs yet. ${statusName[0].toUpperCase()}${statusName.slice(1)} Jobs will appear here when available.`;
+  } else if (!searchQuery && !hasJobs) {
+    const statusName = selectedJobStatus === "archived" ? "archived" : "active";
+    jobEmptyMessage.textContent = `No ${statusName} Jobs yet. ${statusName[0].toUpperCase()}${statusName.slice(1)} Jobs will appear here when available.`;
+  }
+}
+
+function formatJobTimestamp(value) {
+  return new Date(value).toLocaleString();
+}
+
+function renderJobDetail(record) {
+  jobDetailPanel.dataset.jobId = record.id;
+  jobDetailTitle.textContent = record.roleTitle;
+  jobDetailCompany.textContent = record.company;
+  jobDetailStatus.textContent = record.status === "archived" ? "Archived" : "Active";
+  jobDetailStatus.className = record.status === "archived"
+    ? "job-status job-status--archived"
+    : "job-status";
+  jobDetailDescription.textContent = record.description;
+  jobDetailSourceUrl.textContent = record.sourceUrl;
+  jobDetailNotes.textContent = record.notes;
+  jobDetailCreated.textContent = formatJobTimestamp(record.createdAt);
+  jobDetailUpdated.textContent = formatJobTimestamp(record.updatedAt);
+  jobArchiveAction.textContent = record.status === "archived"
+    ? "Reactivate"
+    : "Archive";
+}
+
+function openJobDetail(jobId) {
+  const record = careerState.getJobs().find((item) => item.id === jobId);
+
+  if (!record) {
+    notifications.show("error", "The Job could not be found.");
+    renderJobRecords();
+    return;
+  }
+
+  renderJobDetail(record);
+  jobListPanel.hidden = true;
+  jobDetailPanel.hidden = false;
+  jobDetailTitle.focus();
+}
+
+function returnToJobList() {
+  jobDetailPanel.hidden = true;
+  jobListPanel.hidden = false;
+  jobDetailPanel.dataset.jobId = "";
+  jobDetailTitle.textContent = "";
+  jobDetailCompany.textContent = "";
+  jobDetailStatus.textContent = "";
+  jobDetailStatus.className = "job-status";
+  jobDetailDescription.textContent = "";
+  jobDetailSourceUrl.textContent = "";
+  jobDetailNotes.textContent = "";
+  jobDetailCreated.textContent = "";
+  jobDetailUpdated.textContent = "";
+  renderJobRecords();
+  document.querySelector("#jobs-title").focus();
+}
+
+function changeSelectedJobStatus() {
+  const jobId = jobDetailPanel.dataset.jobId;
+  const record = careerState.getJobs().find((item) => item.id === jobId);
+
+  if (!record) {
+    notifications.show("error", "The Job could not be found.");
+    returnToJobList();
+    return;
+  }
+
+  try {
+    if (record.status === "archived") {
+      careerState.reactivateJob(record.id, new Date().toISOString());
+    } else {
+      careerState.archiveJob(record.id, new Date().toISOString());
+    }
+
+    returnToJobList();
+    notifications.show(
+      "success",
+      record.status === "archived" ? "Job reactivated." : "Job archived."
+    );
+  } catch (error) {
+    notifications.show(
+      "error",
+      error.message || "The Job status could not be changed."
+    );
+  }
+}
+
+function openJobDeleteDialog() {
+  if (dialogManager.isOpen()) {
+    return;
+  }
+
+  const jobId = jobDetailPanel.dataset.jobId;
+  const record = careerState.getJobs().find((item) => item.id === jobId);
+  if (!record) {
+    notifications.show("error", "The Job could not be found.");
+    returnToJobList();
+    return;
+  }
+
+  pendingJobDeletionId = record.id;
+  try {
+    dialogManager.open(jobDeleteDialog, {
+      invoker: jobDeleteAction,
+      initialFocus: jobDeleteCancel,
+      isDirty: () => false
+    });
+  } catch (error) {
+    pendingJobDeletionId = null;
+    notifications.show(
+      "error",
+      error.message || "The Job deletion confirmation could not be opened."
+    );
+  }
+}
+
+function confirmJobDeletion() {
+  const jobId = pendingJobDeletionId;
+  if (!jobId || !jobDeleteDialog.open || isDeletingJob) {
+    return;
+  }
+
+  isDeletingJob = true;
+  try {
+    careerState.deleteJob(jobId);
+  } catch (error) {
+    isDeletingJob = false;
+    notifications.show(
+      "error",
+      error.message || "The Job could not be deleted."
+    );
+    return;
+  }
+
+  pendingJobDeletionId = null;
+  isDeletingJob = false;
+  dialogManager.closeAfterMutation();
+  returnToJobList();
+  notifications.show("success", "Job deleted.");
+}
+
+function clearJobFieldErrors() {
+  jobFields.forEach((field) => {
+    clearFieldError(jobControls[field], jobFieldErrors[field]);
+  });
+}
+
+function resetJobForm() {
+  jobForm.reset();
+  editingJobId = null;
+  jobFormTitle.textContent = "Create Job";
+  jobSubmit.textContent = "Create Job";
+  clearJobFieldErrors();
+}
+
+function populateJobForm(record) {
+  resetJobForm();
+  editingJobId = record?.id ?? null;
+
+  jobFields.forEach((field) => {
+    jobControls[field].value = record?.[field] ?? "";
+  });
+
+  jobFormTitle.textContent = record
+    ? `Edit ${record.roleTitle}`
+    : "Create Job";
+  jobSubmit.textContent = record ? "Save changes" : "Create Job";
+}
+
+function getJobFormSnapshot() {
+  return JSON.stringify(jobFields.map((field) => jobControls[field].value));
+}
+
+function openJobDialog({ invoker, record = null }) {
+  if (dialogManager.isOpen()) {
+    return;
+  }
+
+  populateJobForm(record);
+  jobFormSnapshot = getJobFormSnapshot();
+
+  openDialogWithNavigation(jobDialog, {
+    invoker,
+    initialFocus: jobControls.company,
+    isDirty: () => getJobFormSnapshot() !== jobFormSnapshot,
+    onDiscard() {
+      const savedRecord = editingJobId === null
+        ? null
+        : careerState.getJobs()
+          .find((item) => item.id === editingJobId) ?? null;
+
+      populateJobForm(savedRecord);
+      jobFormSnapshot = getJobFormSnapshot();
+    }
+  });
+}
+
+function showJobValidationErrors(errors) {
+  const messagesByField = new Map();
+
+  errors.forEach(({ field, message }) => {
+    if (!Object.hasOwn(jobControls, field)) {
+      return;
+    }
+
+    const messages = messagesByField.get(field) || [];
+    messages.push(message);
+    messagesByField.set(field, messages);
+  });
+
+  messagesByField.forEach((messages, field) => {
+    showFieldError(
+      jobControls[field],
+      jobFieldErrors[field],
+      [...new Set(messages)].join(" ")
+    );
+  });
+
+  const firstInvalidField = jobFields.find((field) => messagesByField.has(field));
+  if (firstInvalidField) {
+    jobControls[firstInvalidField].focus();
+  }
+}
+
+function readJobForm() {
+  return Object.fromEntries(
+    jobFields.map((field) => [field, jobControls[field].value.trim()])
+  );
+}
+
+function saveJob(event) {
+  event.preventDefault();
+  clearJobFieldErrors();
+
+  const input = readJobForm();
+  const companyRequired = validateRequired(input.company, "a company");
+  const roleTitleRequired = validateRequired(input.roleTitle, "a role title");
+  const requiredResults = [
+    ["company", companyRequired],
+    ["roleTitle", roleTitleRequired]
+  ];
+
+  requiredResults.forEach(([field, result]) => {
+    if (!result.valid) {
+      showFieldError(jobControls[field], jobFieldErrors[field], result.message);
+    }
+  });
+
+  const firstInvalidField = requiredResults.find(([, result]) => !result.valid)?.[0];
+  if (firstInvalidField) {
+    notifications.show("error", "Enter a company and role title.");
+    jobControls[firstInvalidField].focus();
+    return;
+  }
+
+  const existingJob = editingJobId === null
+    ? null
+    : careerState.getJobs().find((record) => record.id === editingJobId) ?? null;
+
+  if (editingJobId !== null && !existingJob) {
+    notifications.show("error", "The Job could not be found.");
+    return;
+  }
+
+  if (
+    existingJob
+    && jobFields.every((field) => input[field] === existingJob[field])
+  ) {
+    return;
+  }
+
+  try {
+    if (existingJob) {
+      careerState.updateJob(existingJob.id, {
+        ...input,
+        updatedAt: new Date().toISOString()
+      });
+      if (!jobDetailPanel.hidden) {
+        const updatedRecord = careerState.getJobs()
+          .find((item) => item.id === existingJob.id);
+        if (updatedRecord) {
+          renderJobDetail(updatedRecord);
+        }
+      }
+    } else {
+      const record = createJobRecord(input, {
+        id: createRecordId(),
+        createdAt: new Date().toISOString()
+      });
+      careerState.createJob(record);
+    }
+
+    dialogManager.closeAfterMutation();
+    resetJobForm();
+    renderJobRecords();
+    notifications.show(
+      "success",
+      existingJob ? "Job updated." : "Job created."
+    );
+  } catch (error) {
+    if (Array.isArray(error.errors)) {
+      showJobValidationErrors(error.errors);
+    }
+
+    notifications.show(
+      "error",
+      error.message || "The Job could not be saved."
+    );
+  }
 }
 
 function beginEmploymentEdit(record, invoker) {
@@ -1513,6 +1944,66 @@ achievementDeleteCancel.addEventListener("click", () => {
   pendingAchievementDeletion = null;
 });
 achievementDeleteConfirm.addEventListener("click", confirmAchievementDeletion);
+jobCreateAction.addEventListener("click", () => {
+  openJobDialog({ invoker: jobCreateAction });
+});
+jobEmptyCreateAction.addEventListener("click", () => {
+  openJobDialog({ invoker: jobCreateAction });
+});
+jobBackAction.addEventListener("click", returnToJobList);
+jobArchiveAction.addEventListener("click", changeSelectedJobStatus);
+jobDeleteAction.addEventListener("click", openJobDeleteDialog);
+jobDeleteDialog.addEventListener("cancel", () => {
+  if (!isDeletingJob) {
+    pendingJobDeletionId = null;
+  }
+});
+jobDeleteCancel.addEventListener("click", () => {
+  dialogManager.requestClose();
+  pendingJobDeletionId = null;
+});
+jobDeleteConfirm.addEventListener("click", confirmJobDeletion);
+jobEditAction.addEventListener("click", () => {
+  const record = careerState.getJobs()
+    .find((item) => item.id === jobDetailPanel.dataset.jobId);
+
+  if (!record) {
+    notifications.show("error", "The Job could not be found.");
+    return;
+  }
+
+  openJobDialog({ invoker: jobEditAction, record });
+});
+jobForm.addEventListener("submit", saveJob);
+jobForm.addEventListener("input", (event) => {
+  const field = jobFields.find((item) => jobControls[item] === event.target);
+
+  if (field) {
+    clearFieldError(jobControls[field], jobFieldErrors[field]);
+  }
+});
+jobCancel.addEventListener("click", () => {
+  dialogManager.requestClose();
+});
+jobFilter.addEventListener("change", () => {
+  const selectedFilter = jobFilter.querySelector('input[name="job-filter"]:checked');
+
+  if (selectedFilter) {
+    selectedJobStatus = selectedFilter.value;
+    renderJobRecords();
+  }
+});
+jobSearchInput.addEventListener("input", renderJobRecords);
+jobSearchClear.addEventListener("click", () => {
+  jobSearchInput.value = "";
+  renderJobRecords();
+  jobSearchInput.focus();
+});
+jobSearchEmptyClear.addEventListener("click", () => {
+  jobSearchInput.value = "";
+  renderJobRecords();
+  jobSearchInput.focus();
+});
 
 const initialProfile = careerState.getProfile();
 
@@ -1520,6 +2011,7 @@ populateProfileForm(initialProfile);
 renderProfile(initialProfile);
 renderEmploymentRecords();
 renderAchievementRecords();
+renderJobRecords();
 
 function closeMobileMenu(restoreFocus = false) {
   const wasOpen = sidebar.classList.contains("is-open");
@@ -1590,6 +2082,10 @@ function navigateTo(viewName, { focusDestination = false } = {}) {
   pageViews.forEach((page) => {
     page.hidden = page.dataset.pageView !== viewName;
   });
+
+  if (viewName === "jobs") {
+    renderJobRecords();
+  }
 
   currentSection.textContent = view.label;
   pageTitle.textContent = view.title;

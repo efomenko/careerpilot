@@ -81,6 +81,33 @@ function completeAchievement(id, overrides = {}) {
   };
 }
 
+function completeJob(id, overrides = {}) {
+  return {
+    id,
+    company: "Example Company",
+    roleTitle: "Engineer",
+    description: "",
+    sourceUrl: "",
+    notes: "",
+    status: "active",
+    createdAt,
+    updatedAt: createdAt,
+    ...overrides
+  };
+}
+
+function emptySnapshot(overrides = {}) {
+  return {
+    profile: null,
+    employmentRecords: [],
+    achievementRecords: [],
+    jobs: [],
+    requirements: [],
+    achievementMappings: [],
+    ...overrides
+  };
+}
+
 function completeSnapshot(overrides = {}) {
   return {
     profile: completeProfile(),
@@ -88,16 +115,21 @@ function completeSnapshot(overrides = {}) {
     achievementRecords: [completeAchievement("achievement-1", {
       employmentId: "employment-1"
     })],
+    jobs: [],
+    requirements: [],
+    achievementMappings: [],
     ...overrides
   };
 }
 
-test("initializes empty profile and employment state", () => {
+test("initializes empty profile and record collections", () => {
   const state = createCareerState();
 
   assert.equal(state.getProfile(), null);
   assert.deepEqual(state.getEmploymentRecords(), []);
   assert.deepEqual(state.getAchievementRecords(), []);
+  assert.deepEqual(state.getJobs(), []);
+  assert.deepEqual(state.getSnapshot(), emptySnapshot());
 });
 
 test("restores a complete validated snapshot without mutation notification", () => {
@@ -132,11 +164,7 @@ test("restores null profile and empty record collections", () => {
     achievementRecords: []
   });
 
-  assert.deepEqual(state.getSnapshot(), {
-    profile: null,
-    employmentRecords: [],
-    achievementRecords: []
-  });
+  assert.deepEqual(state.getSnapshot(), emptySnapshot());
 });
 
 test("allows IDs to repeat across different record collections", () => {
@@ -187,11 +215,7 @@ test("rejects invalid snapshots atomically with record validation context", () =
       () => state.restoreSnapshot(invalidSnapshot),
       (error) => error instanceof TypeError
     );
-    assert.deepEqual(state.getSnapshot(), {
-      profile: null,
-      employmentRecords: [],
-      achievementRecords: []
-    });
+    assert.deepEqual(state.getSnapshot(), emptySnapshot());
   }
 });
 
@@ -321,11 +345,7 @@ test("array element descriptor reflection failures are contextual TypeErrors", (
       && /snapshot\.achievementRecords\[0\]\.evidence\[0\]\[0\]/.test(error.message)
       && /inspected safely/.test(error.message)
   );
-  assert.deepEqual(state.getSnapshot(), {
-    profile: null,
-    employmentRecords: [],
-    achievementRecords: []
-  });
+  assert.deepEqual(state.getSnapshot(), emptySnapshot());
 });
 
 test("proxy reflection failures do not partially hydrate state", () => {
@@ -345,11 +365,7 @@ test("proxy reflection failures do not partially hydrate state", () => {
     (error) => error instanceof TypeError
       && /snapshot\.employmentRecords could not be inspected safely/.test(error.message)
   );
-  assert.deepEqual(state.getSnapshot(), {
-    profile: null,
-    employmentRecords: [],
-    achievementRecords: []
-  });
+  assert.deepEqual(state.getSnapshot(), emptySnapshot());
 
   state.restoreSnapshot({
     profile: null,
@@ -413,12 +429,240 @@ test("hydration detaches input evidence and rejects unsupported evidence values"
   for (const invalidSnapshot of invalidInputs) {
     const freshState = createCareerState();
     assert.throws(() => freshState.restoreSnapshot(invalidSnapshot), TypeError);
-    assert.deepEqual(freshState.getSnapshot(), {
-      profile: null,
-      employmentRecords: [],
-      achievementRecords: []
-    });
+    assert.deepEqual(freshState.getSnapshot(), emptySnapshot());
   }
+});
+
+test("creates Jobs with validation, safe copies, and duplicate ID protection", () => {
+  const state = createCareerState();
+  const job = completeJob("job-1");
+  const returned = state.createJob(job);
+
+  assert.deepEqual(returned, job);
+  assert.notEqual(returned, job);
+  returned.company = "Changed copy";
+  job.roleTitle = "Changed input";
+  assert.deepEqual(state.getJobs(), [completeJob("job-1")]);
+
+  assert.throws(
+    () => state.createJob(completeJob("job-1")),
+    (error) => error.code === "DUPLICATE_ID"
+  );
+  assert.throws(
+    () => state.createJob(completeJob("invalid", { company: " " })),
+    (error) => error.code === "VALIDATION_ERROR"
+      && error.errors.some(({ field }) => field === "company")
+  );
+  assert.deepEqual(state.getJobs(), [completeJob("job-1")]);
+});
+
+test("partially updates Jobs while preserving immutable and omitted fields", () => {
+  const state = createCareerState();
+  state.createJob(completeJob("job-1"));
+
+  const updated = state.updateJob("job-1", {
+    company: "Updated Company",
+    updatedAt
+  });
+  assert.deepEqual(updated, completeJob("job-1", {
+    company: "Updated Company",
+    updatedAt
+  }));
+  assert.equal(state.getJobs()[0].roleTitle, "Engineer");
+  assert.equal(state.getJobs()[0].createdAt, createdAt);
+});
+
+test("rejects immutable, unknown, and invalid Job updates atomically", () => {
+  const state = createCareerState();
+  state.createJob(completeJob("job-1"));
+  const unchanged = state.getJobs();
+  const invalidUpdates = [
+    [{ id: "other", updatedAt }, "IMMUTABLE_FIELD"],
+    [{ createdAt: updatedAt, updatedAt }, "IMMUTABLE_FIELD"],
+    [{ unexpected: true, updatedAt }, "VALIDATION_ERROR"],
+    [{ company: " ", updatedAt }, "VALIDATION_ERROR"],
+    [{ status: "archived", updatedAt }, "INVALID_OPERATION"]
+  ];
+
+  for (const [updates, code] of invalidUpdates) {
+    assert.throws(
+      () => state.updateJob("job-1", updates),
+      (error) => error.code === code
+    );
+    assert.deepEqual(state.getJobs(), unchanged);
+  }
+});
+
+test("no-op Job updates do not change timestamps or notify", () => {
+  let notifications = 0;
+  const state = createCareerState({ onMutation: () => { notifications += 1; } });
+  state.createJob(completeJob("job-1"));
+  notifications = 0;
+
+  const result = state.updateJob("job-1", {
+    company: "Example Company",
+    updatedAt
+  });
+
+  assert.deepEqual(result, completeJob("job-1"));
+  assert.equal(notifications, 0);
+  assert.deepEqual(state.getJobs(), [completeJob("job-1")]);
+});
+
+test("archives and reactivates Jobs idempotently", () => {
+  let notifications = 0;
+  const state = createCareerState({ onMutation: () => { notifications += 1; } });
+  state.createJob(completeJob("job-1"));
+  notifications = 0;
+
+  assert.deepEqual(state.archiveJob("job-1", updatedAt), completeJob("job-1", {
+    status: "archived",
+    updatedAt
+  }));
+  assert.equal(notifications, 1);
+  assert.deepEqual(state.archiveJob("job-1", createdAt), completeJob("job-1", {
+    status: "archived",
+    updatedAt
+  }));
+  assert.equal(notifications, 1);
+
+  assert.deepEqual(state.reactivateJob("job-1", createdAt), completeJob("job-1", {
+    status: "active",
+    updatedAt: createdAt
+  }));
+  assert.equal(notifications, 2);
+  assert.deepEqual(state.reactivateJob("job-1", updatedAt), completeJob("job-1", {
+    status: "active",
+    updatedAt: createdAt
+  }));
+  assert.equal(notifications, 2);
+  assert.throws(
+    () => state.archiveJob("missing", updatedAt),
+    (error) => error.code === "NOT_FOUND"
+  );
+});
+
+test("deletes a Job and cascades only its Requirements and their mappings", () => {
+  const snapshot = completeSnapshot({
+    jobs: [
+      completeJob("job-1"),
+      completeJob("job-2", { company: "Other Company" })
+    ],
+    requirements: [
+      { id: "requirement-1", jobId: "job-1" },
+      { id: "requirement-2", jobId: "job-1" },
+      { id: "requirement-3", jobId: "job-2" }
+    ],
+    achievementMappings: [
+      { id: "mapping-1", requirementId: "requirement-1", achievementId: "achievement-1" },
+      { id: "mapping-2", requirementId: "requirement-2", achievementId: "achievement-1" },
+      { id: "mapping-3", requirementId: "requirement-3", achievementId: "achievement-1" },
+      { id: "mapping-unrelated", requirementId: "missing", achievementId: "achievement-1" }
+    ]
+  });
+  const notifications = [];
+  const state = createCareerState({
+    onMutation(getSnapshot) {
+      notifications.push(getSnapshot());
+    }
+  });
+  state.restoreSnapshot(snapshot);
+
+  assert.deepEqual(state.deleteJob("job-1"), {
+    jobId: "job-1",
+    deletedRequirements: 2,
+    deletedAchievementMappings: 2
+  });
+  assert.deepEqual(state.getJobs(), [snapshot.jobs[1]]);
+  assert.deepEqual(state.getSnapshot().requirements, [snapshot.requirements[2]]);
+  assert.deepEqual(
+    state.getSnapshot().achievementMappings,
+    [snapshot.achievementMappings[2], snapshot.achievementMappings[3]]
+  );
+  assert.deepEqual(state.getAchievementRecords(), snapshot.achievementRecords);
+  assert.equal(notifications.length, 1);
+  assert.deepEqual(notifications[0], state.getSnapshot());
+});
+
+test("deletes Jobs without Requirements and rejects missing Job deletion atomically", () => {
+  const state = createCareerState();
+  state.restoreSnapshot(completeSnapshot({
+    jobs: [completeJob("job-1")],
+    achievementMappings: [{ id: "orphan-mapping", requirementId: "missing" }]
+  }));
+  let notifications = 0;
+  const observedState = createCareerState({
+    onMutation: () => { notifications += 1; }
+  });
+  observedState.restoreSnapshot(state.getSnapshot());
+
+  assert.deepEqual(observedState.deleteJob("job-1"), {
+    jobId: "job-1",
+    deletedRequirements: 0,
+    deletedAchievementMappings: 0
+  });
+  assert.equal(notifications, 1);
+  const afterDelete = observedState.getSnapshot();
+  assert.throws(
+    () => observedState.deleteJob("job-1"),
+    (error) => error.code === "NOT_FOUND"
+  );
+  assert.equal(notifications, 1);
+  assert.deepEqual(observedState.getSnapshot(), afterDelete);
+});
+
+test("deleting a Job with Requirements but no mappings preserves other records", () => {
+  const state = createCareerState();
+  state.restoreSnapshot(completeSnapshot({
+    jobs: [
+      completeJob("job-1"),
+      completeJob("job-2", { company: "Other Company" })
+    ],
+    requirements: [
+      { id: "requirement-1", jobId: "job-1" },
+      { id: "requirement-2", jobId: "job-2" }
+    ]
+  }));
+
+  assert.deepEqual(state.deleteJob("job-1"), {
+    jobId: "job-1",
+    deletedRequirements: 1,
+    deletedAchievementMappings: 0
+  });
+  assert.deepEqual(state.getJobs(), [completeJob("job-2", {
+    company: "Other Company"
+  })]);
+  assert.deepEqual(state.getSnapshot().requirements, [
+    { id: "requirement-2", jobId: "job-2" }
+  ]);
+  assert.deepEqual(state.getSnapshot().achievementMappings, []);
+});
+
+test("Job and future relationship snapshots are detached from internal state", () => {
+  const state = createCareerState();
+  state.restoreSnapshot(completeSnapshot({
+    jobs: [completeJob("job-1")],
+    requirements: [{ id: "requirement-1", jobId: "job-1" }],
+    achievementMappings: [{
+      id: "mapping-1",
+      requirementId: "requirement-1",
+      achievementId: "achievement-1"
+    }]
+  }));
+
+  const snapshot = state.getSnapshot();
+  snapshot.jobs[0].company = "Changed";
+  snapshot.requirements[0].jobId = "changed";
+  snapshot.achievementMappings[0].requirementId = "changed";
+  assert.deepEqual(state.getSnapshot().jobs, [completeJob("job-1")]);
+  assert.deepEqual(state.getSnapshot().requirements, [
+    { id: "requirement-1", jobId: "job-1" }
+  ]);
+  assert.deepEqual(state.getSnapshot().achievementMappings, [{
+    id: "mapping-1",
+    requirementId: "requirement-1",
+    achievementId: "achievement-1"
+  }]);
 });
 
 test("notifies once after every successful mutation with the complete snapshot", () => {

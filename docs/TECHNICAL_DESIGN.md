@@ -30,7 +30,9 @@ careerpilot/
 │   └── DECISIONS.md
 ├── tests/
 │   ├── career-model.test.js
-│   └── achievement-model.test.js
+│   ├── achievement-model.test.js
+│   ├── job-model.test.js
+│   └── job-ui-helpers.test.js
 ├── src/
 │   ├── css/
 │   │   └── styles.css
@@ -38,13 +40,17 @@ careerpilot/
 │       ├── app.js
 │       ├── achievement-model.js
 │       ├── career-model.js
-│       └── career-state.js
+│       ├── career-state.js
+│       ├── job-model.js
+│       └── job-ui-helpers.js
 ├── index.html
 ├── README.md
 └── .gitignore
 ```
 
-Additional JavaScript modules and test directories may be introduced as the implementation grows. The structure above is a proposed baseline, not a claim that every file already exists.
+Additional JavaScript modules and test files may be introduced as the
+implementation grows. The structure above highlights the current career and
+Job modules; it is not an exhaustive listing of every repository file.
 
 ## 4. Initial Technology Stack
 
@@ -55,9 +61,9 @@ Additional JavaScript modules and test directories may be introduced as the impl
 | Application logic | Vanilla JavaScript |
 | Navigation | Client-side view switching |
 | Initial routing | URL hash, if retained from the shell implementation |
-| Initial persistence | CP-014 target: browser `localStorage` with one version-1 JSON envelope |
+| Persistence | Browser `localStorage` with a version-2 JSON envelope; valid version-1 data is migrated on load |
 | Data interchange | Versioned JSON |
-| Testing | Start with manual checks; introduce automated tests for critical logic |
+| Testing | Node.js built-in test runner (`npm test`) for automated tests; browser checks for UI behavior |
 | AI | Deferred until the manual workflow is stable |
 
 No frontend framework or build system is required for the initial static application unless a documented decision changes this approach.
@@ -85,16 +91,20 @@ Responsibilities:
 - Control navigation.
 - Connect UI events to data and business rules.
 
-`src/js/career-state.js` provides the single in-memory state factory for one
-Career Profile, Employment History records, and Achievement records. It uses
-the corresponding model constructors and validators, accepts IDs and
-timestamps from its caller, and returns copies so callers cannot mutate its
-internal state. The existing Achievements view and shared `careerState`
-instance are used; a separate achievement state manager is not introduced.
-The state module is independent of the DOM and browser storage. The current
-implementation keeps state in memory; CP-014's approved target adds persistence
-outside the domain models, restoring and validating the complete snapshot
-before rendering and saving after successful state mutations.
+`src/js/career-state.js` provides the shared in-memory state factory for the
+Career Profile, Employment History, Achievements, and Jobs. It uses the
+corresponding model constructors and validators, accepts IDs and timestamps
+from its caller where needed, returns copies so callers cannot mutate its
+internal state, and exposes mutation operations used by the UI. Requirements
+and achievement-mapping collections are included in state snapshots for
+relationships and cascade behavior; their user-facing management workflows
+are outside CP-020. The state module is independent of the DOM and browser
+storage. `src/js/career-persistence.js` restores and validates the complete
+snapshot before rendering and saves after successful state mutations.
+
+`src/js/job-ui-helpers.js` contains pure Job-list transformations used by the
+presentation layer: search matching, status filtering, and sorting. It does
+not own Job domain rules, state mutation, or persistence.
 
 ### 5.3 Domain logic
 
@@ -103,13 +113,17 @@ Responsibilities:
 - Construct and validate career, achievement, and job records.
 - Implement achievement construction and validation in
   `src/js/achievement-model.js`.
+- Implement Job construction and validation in `src/js/job-model.js`.
 - Map requirements to evidence.
 - Calculate deterministic fit scores.
 - Build template-based drafts.
 - Detect known unsupported or unverified claims.
 - Validate import and export structures.
 
-These functions should be designed to support repeatable tests independently of the UI.
+Model functions are tested independently of the UI. Job-list search,
+filtering, and sorting are UI transformations implemented separately in
+`src/js/job-ui-helpers.js`; they do not implement requirement management or
+fit assessment.
 
 ### 5.4 Persistence layer
 
@@ -120,10 +134,9 @@ Responsibilities:
 - Version stored data where appropriate.
 - Report failures without silently discarding data.
 
-The approved CP-014 target uses browser `localStorage` and one versioned JSON
-envelope. Persistence remains separate from the model and state contracts; the
-current implementation status must be checked before describing it as
-available. Storage limitations and failures must be explained to users.
+The current implementation uses browser `localStorage` and one version-2 JSON
+envelope. Persistence remains separate from the model and state contracts.
+Storage limitations and failures must be explained to users.
 
 ## 6. Career Data Model
 
@@ -283,7 +296,7 @@ approval remains a separate concept.
   Drafting warnings are deferred to CP-030/CP-034, and job-fit scoring
   treatment is deferred to CP-023.
 
-### Job record (conceptual; not finalized by CP-010)
+### Job record (CP-020)
 
 ```js
 {
@@ -292,12 +305,17 @@ approval remains a separate concept.
   roleTitle: "",
   description: "",
   sourceUrl: "",
-  requirements: [],
-  savedAt: ""
+  notes: "",
+  status: "active",
+  createdAt: "2025-04-20T14:30:00.000Z",
+  updatedAt: "2025-04-20T14:30:00.000Z"
 }
 ```
 
-### Job requirement (conceptual; not finalized by CP-010)
+`status` is `active` or `archived`. CP-020 creates and validates Job records
+with `src/js/job-model.js`; the application supplies IDs and timestamps.
+
+### Job requirement (future user-facing workflow)
 
 ```js
 {
@@ -339,8 +357,14 @@ approval remains a separate concept.
 }
 ```
 
-The non-career examples remain conceptual. Do not implement them as final
-schemas without reviewing validation, migrations, and task acceptance criteria.
+Requirements and achievement-mapping collections exist in the state and
+persistence snapshots to support relationships and Job-deletion cascades.
+Their user-facing creation and management workflows, and a finalized
+Requirement model contract, are outside CP-020.
+
+The other non-career examples remain conceptual. Do not implement them as
+final schemas without reviewing validation, migrations, and task acceptance
+criteria.
 CP-013 defines verification status for achievement records only; the
 conceptual draft shape does not establish a draft verification field.
 
@@ -401,25 +425,33 @@ Validation errors should explain what needs to be corrected. Avoid silently coer
 
 ## 10. Persistence and Data Recovery
 
-The approved CP-014 target uses browser `localStorage` with one JSON envelope:
+The current implementation uses browser `localStorage` with one version-2 JSON
+envelope:
 
 ```js
 {
-  version: 1,
+  version: 2,
   profile: null,
   employmentRecords: [],
-  achievementRecords: []
+  achievementRecords: [],
+  jobs: [],
+  requirements: [],
+  achievementMappings: []
 }
 ```
 
-The current application state is in memory; this section describes the
-approved CP-014 target, not a claim that persistence has been implemented. The
-complete snapshot must be restored and validated before application rendering,
-and the complete Career Knowledge Base must be saved after each successful
-state mutation. Validation covers JSON parsing, envelope structure and
-version, complete records, duplicate IDs, and employment relationships.
-Invalid data must never be partially restored, silently discarded, normalized,
-or used to overwrite the original stored value.
+Valid version-1 envelopes containing `profile`, `employmentRecords`, and
+`achievementRecords` are loaded as version-2 state by adding empty `jobs`,
+`requirements`, and `achievementMappings` collections. Loading alone does not
+rewrite the stored envelope; a subsequent successful state mutation saves the
+complete version-2 envelope.
+
+The complete snapshot is restored and validated before application rendering,
+and the complete state is saved after each successful state mutation.
+Validation covers JSON parsing, envelope structure and version, complete
+records, duplicate IDs, and relationships. Invalid data must never be
+partially restored, silently discarded, normalized, or used to overwrite the
+original stored value.
 
 If JSON is invalid, the envelope or records are invalid, or the version is
 unsupported, retain the original value, start with an empty in-memory Career
@@ -436,8 +468,10 @@ A failed write must not produce a persistence-success message, and the previous
 stored value must not be deleted before attempting a write.
 
 Browser storage is not a secure cloud backup, and data may be lost if browser
-data is cleared. Import/export, backend storage, cloud synchronization, and
-automatic schema migration are outside CP-014.
+data is cleared. Import/export, backend storage, and cloud synchronization are
+outside CP-014. The version-1 to version-2 migration described above is
+implemented by the storage layer; other automatic schema migrations remain
+out of scope.
 
 ## 11. Job-Fit Assessment
 
@@ -505,8 +539,9 @@ See `TEST_PLAN.md` for test scenarios.
 ## 15. Technical Decisions Requiring Confirmation
 
 - Schemas for future record types other than the Career Profile, Employment
-  History, and Achievement record remain unresolved. The Achievement schema is
-  finalized by DEC-014.
+  History, Achievement, and Job records remain unresolved. The Achievement
+  schema is finalized by DEC-014; the Job record is established by CP-020.
+  Requirement, draft, and application schemas remain proposals.
 - Import merge or replacement behavior.
 - Draft versioning strategy.
 - Fit scoring weights and treatment of unverified evidence.

@@ -8,6 +8,7 @@ import {
   createAchievementRecord,
   validateAchievementRecord
 } from "./achievement-model.js";
+import { validateJobRecord } from "./job-model.js";
 
 function copyProfile(profile) {
   return profile ? { ...profile, skills: [...profile.skills] } : null;
@@ -61,6 +62,10 @@ function copyNestedData(value, copies = new WeakMap()) {
 
 function copyAchievementRecord(record) {
   return copyNestedData(record);
+}
+
+function copyJobRecord(record) {
+  return { ...record };
 }
 
 function copySnapshotValue(value, copies = new WeakMap(), path = "snapshot") {
@@ -197,12 +202,21 @@ function prepareSnapshotCopy(snapshot) {
     throw new TypeError("Snapshot must be a plain object.");
   }
 
-  const expectedFields = ["profile", "employmentRecords", "achievementRecords"];
+  const expectedFields = [
+    "profile",
+    "employmentRecords",
+    "achievementRecords",
+    "jobs",
+    "requirements",
+    "achievementMappings"
+  ];
+  const requiredFields = ["profile", "employmentRecords", "achievementRecords"];
   for (const key of keys) {
     if (typeof key !== "string" || !expectedFields.includes(key)) {
       throw new TypeError(`Snapshot contains unexpected property "${String(key)}".`);
     }
   }
+  const normalizedSnapshot = {};
   for (const field of expectedFields) {
     let descriptor;
     try {
@@ -210,15 +224,20 @@ function prepareSnapshotCopy(snapshot) {
     } catch {
       throw new TypeError(`Snapshot property "${field}" could not be inspected safely.`);
     }
+    if (!descriptor && !requiredFields.includes(field)) {
+      normalizedSnapshot[field] = [];
+      continue;
+    }
     if (!descriptor) {
       throw new TypeError(`Snapshot is missing required property "${field}".`);
     }
     if (!descriptor.enumerable || !("value" in descriptor)) {
       throw new TypeError(`Snapshot property "${field}" must be an enumerable data property.`);
     }
+    normalizedSnapshot[field] = descriptor.value;
   }
 
-  return copySnapshotValue(snapshot);
+  return copySnapshotValue(normalizedSnapshot);
 }
 
 function validateSnapshotRecords(snapshot) {
@@ -318,6 +337,63 @@ function validateSnapshotRecords(snapshot) {
           message: `Employment History record "${record.employmentId}" does not exist.`,
           recordType: "achievement",
           recordId: record.id
+        });
+      }
+    });
+  }
+
+  if (!Array.isArray(snapshot.jobs)) {
+    errors.push({
+      field: "jobs",
+      message: "Jobs must be an array.",
+      recordType: "job"
+    });
+  } else {
+    const jobIds = new Set();
+    snapshot.jobs.forEach((record, index) => {
+      const result = validateJobRecord(record);
+      if (!result.valid) {
+        errors.push(...result.errors.map((error) => ({
+          ...error,
+          field: `jobs[${index}].${error.field}`,
+          recordType: "job",
+          recordId: record?.id
+        })));
+      }
+      if (record && typeof record.id === "string") {
+        if (jobIds.has(record.id)) {
+          errors.push({
+            field: `jobs[${index}].id`,
+            message: `Duplicate Job ID "${record.id}".`,
+            recordType: "job",
+            recordId: record.id
+          });
+        } else {
+          jobIds.add(record.id);
+        }
+      }
+    });
+  }
+
+  for (const [field, recordType] of [
+    ["requirements", "requirement"],
+    ["achievementMappings", "achievement mapping"]
+  ]) {
+    if (!Array.isArray(snapshot[field])) {
+      errors.push({
+        field,
+        message: `${recordType === "requirement" ? "Requirements" : "Achievement mappings"} must be an array.`,
+        recordType
+      });
+      continue;
+    }
+
+    snapshot[field].forEach((record, index) => {
+      if (!isPlainObject(record)) {
+        errors.push({
+          field: `${field}[${index}]`,
+          message: `Each ${recordType} must be a plain object.`,
+          recordType
         });
       }
     });
@@ -425,6 +501,20 @@ function throwValidationError(recordName, errors) {
   throw error;
 }
 
+function throwJobValidationError(recordName, errors) {
+  const details = errors.map(({ field, message }) => `${field}: ${message}`).join(" ");
+  const error = new TypeError(`${recordName} is invalid. ${details}`);
+  error.code = "VALIDATION_ERROR";
+  error.errors = errors;
+  throw error;
+}
+
+function createJobStateError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
 function validateRecord(record, validator, recordName) {
   const result = validator(record);
 
@@ -467,9 +557,14 @@ function assertEditableInput(input, reservedFields, recordName) {
  * - updateAchievementVerificationStatus(id, status, updatedAt): deliberately
  *   update verification status while preserving the record content.
  * - deleteAchievementRecord(id): remove a record by ID.
+ * - createJob(job): add a complete Job record.
+ * - updateJob(id, updates): partially update a Job with caller-supplied updatedAt.
+ * - archiveJob(id, updatedAt) / reactivateJob(id, updatedAt): change Job status.
+ * - deleteJob(id): remove a Job and its requirements and achievement mappings.
  * - getProfile(): return a safe profile copy, or null when absent.
  * - getEmploymentRecords(): return a new array containing safe record copies.
  * - getAchievementRecords(): return a new array containing safe record copies.
+ * - getJobs(): return a new array containing safe Job copies.
  *
  * Invalid records throw TypeError; unknown IDs and duplicate IDs throw Error.
  * No browser APIs, persistence, clock, or ID generation are used.
@@ -485,6 +580,9 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
   let profile = null;
   let employmentRecords = [];
   let achievementRecords = [];
+  let jobs = [];
+  let requirements = [];
+  let achievementMappings = [];
   let isFresh = true;
 
   function reportMutationError(error) {
@@ -545,6 +643,9 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       profile = replacement.profile;
       employmentRecords = replacement.employmentRecords;
       achievementRecords = replacement.achievementRecords;
+      jobs = replacement.jobs.map(copyJobRecord);
+      requirements = replacement.requirements;
+      achievementMappings = replacement.achievementMappings;
       isFresh = false;
     },
 
@@ -552,7 +653,10 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       return prepareSnapshotCopy({
         profile,
         employmentRecords,
-        achievementRecords
+        achievementRecords,
+        jobs,
+        requirements,
+        achievementMappings
       });
     },
 
@@ -731,6 +835,146 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       notifyMutation();
     },
 
+    createJob(job) {
+      const result = validateJobRecord(job);
+      if (!result.valid) {
+        throwJobValidationError("Job record", result.errors);
+      }
+      if (jobs.some((record) => record.id === job.id)) {
+        throw createJobStateError(
+          "DUPLICATE_ID",
+          `A Job with ID "${job.id}" already exists.`
+        );
+      }
+
+      const newJob = copyJobRecord(job);
+      jobs.push(newJob);
+      notifyMutation();
+      return copyJobRecord(newJob);
+    },
+
+    updateJob(jobId, updates) {
+      const jobIndex = jobs.findIndex((record) => record.id === jobId);
+      if (jobIndex === -1) {
+        throw createJobStateError("NOT_FOUND", `Job "${jobId}" does not exist.`);
+      }
+      if (
+        updates === null
+        || typeof updates !== "object"
+        || Array.isArray(updates)
+      ) {
+        throw createJobStateError(
+          "VALIDATION_ERROR",
+          "Job updates require an object of Job fields."
+        );
+      }
+
+      for (const field of ["id", "createdAt"]) {
+        if (Object.hasOwn(updates, field)) {
+          throw createJobStateError(
+            "IMMUTABLE_FIELD",
+            `Job updates cannot change ${field}.`
+          );
+        }
+      }
+      if (Object.hasOwn(updates, "status")) {
+        throw createJobStateError(
+          "INVALID_OPERATION",
+          "Job status must be changed with archiveJob or reactivateJob."
+        );
+      }
+
+      const allowedFields = new Set([
+        "company",
+        "roleTitle",
+        "description",
+        "sourceUrl",
+        "notes",
+        "updatedAt"
+      ]);
+      const unknownField = Object.keys(updates)
+        .find((field) => !allowedFields.has(field));
+      if (unknownField) {
+        throw createJobStateError(
+          "VALIDATION_ERROR",
+          `Job updates contain unknown field "${unknownField}".`
+        );
+      }
+
+      const existingJob = jobs[jobIndex];
+      const updatedFields = Object.keys(updates)
+        .filter((field) => field !== "updatedAt");
+      const hasChanges = updatedFields.some((field) =>
+        !Object.is(existingJob[field], updates[field])
+      );
+      if (!hasChanges) {
+        return copyJobRecord(existingJob);
+      }
+      if (!Object.hasOwn(updates, "updatedAt")) {
+        throw createJobStateError(
+          "VALIDATION_ERROR",
+          "A changed Job requires a caller-supplied updatedAt timestamp."
+        );
+      }
+
+      const updatedJob = {
+        ...existingJob,
+        ...updates
+      };
+      const result = validateJobRecord(updatedJob);
+      if (!result.valid) {
+        throwJobValidationError("Job record", result.errors);
+      }
+
+      jobs[jobIndex] = copyJobRecord(updatedJob);
+      notifyMutation();
+      return copyJobRecord(jobs[jobIndex]);
+    },
+
+    archiveJob(jobId, updatedAt) {
+      return updateJobStatus(jobId, "archived", updatedAt);
+    },
+
+    reactivateJob(jobId, updatedAt) {
+      return updateJobStatus(jobId, "active", updatedAt);
+    },
+
+    deleteJob(jobId) {
+      const jobIndex = jobs.findIndex((record) => record.id === jobId);
+      if (jobIndex === -1) {
+        throw createJobStateError("NOT_FOUND", `Job "${jobId}" does not exist.`);
+      }
+
+      const deletedRequirements = requirements.filter(
+        (requirement) => requirement.jobId === jobId
+      );
+      const deletedRequirementIds = new Set(
+        deletedRequirements
+          .map((requirement) => requirement.id)
+          .filter((id) => typeof id === "string")
+      );
+      const deletedMappings = achievementMappings.filter(
+        (mapping) => deletedRequirementIds.has(mapping.requirementId)
+      );
+      const remainingJobs = jobs.filter((record) => record.id !== jobId);
+      const remainingRequirements = requirements.filter(
+        (requirement) => requirement.jobId !== jobId
+      );
+      const remainingMappings = achievementMappings.filter(
+        (mapping) => !deletedRequirementIds.has(mapping.requirementId)
+      );
+
+      jobs = remainingJobs;
+      requirements = remainingRequirements;
+      achievementMappings = remainingMappings;
+      notifyMutation();
+      return {
+        jobId,
+        deletedRequirements: deletedRequirements.length,
+        deletedAchievementMappings: deletedMappings.length
+      };
+    },
+
     getProfile() {
       return copyProfile(profile);
     },
@@ -741,8 +985,34 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
 
     getAchievementRecords() {
       return achievementRecords.map(copyAchievementRecord);
+    },
+
+    getJobs() {
+      return jobs.map(copyJobRecord);
     }
   };
+
+  function updateJobStatus(jobId, status, updatedAt) {
+    const jobIndex = jobs.findIndex((record) => record.id === jobId);
+    if (jobIndex === -1) {
+      throw createJobStateError("NOT_FOUND", `Job "${jobId}" does not exist.`);
+    }
+
+    const existingJob = jobs[jobIndex];
+    if (existingJob.status === status) {
+      return copyJobRecord(existingJob);
+    }
+
+    const updatedJob = { ...existingJob, status, updatedAt };
+    const result = validateJobRecord(updatedJob);
+    if (!result.valid) {
+      throwJobValidationError("Job record", result.errors);
+    }
+
+    jobs[jobIndex] = copyJobRecord(updatedJob);
+    notifyMutation();
+    return copyJobRecord(jobs[jobIndex]);
+  }
 
   return state;
 }

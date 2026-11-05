@@ -240,10 +240,51 @@ For M6, compare generated output against known evidence and documented expected 
 
 ### CP-020 — Job CRUD
 
-- Create, edit, and delete a job.
-- Test missing required fields.
-- Save a source URL and notes where supported.
-- Confirm job references remain consistent.
+#### Automated coverage
+
+- `tests/job-model.test.js`: validate Job construction, required and optional
+  fields, source URL formats, status, timestamps, and invalid or unknown fields.
+- `tests/job-ui-helpers.test.js`: verify search over company, role title,
+  description, and notes; case-insensitive partial matching; empty queries;
+  Active/Archived filtering combined with search; updated-time sorting with
+  created-time tie-breaking; and that inputs are not mutated.
+- `tests/career-state.test.js`: verify Job creation, update, archive,
+  reactivate, and deletion, including deletion of the selected Job's
+  Requirements and their achievement mappings while preserving Achievement
+  and Employment History records.
+- `tests/career-persistence.test.js` and `tests/career-storage.test.js`: verify
+  Job mutations persist, v1 snapshots load as v2 state with empty Jobs,
+  Requirements, and achievement-mapping collections, and the complete v2
+  envelope is written after a successful mutation.
+- Run `npm test` to execute the automated suite.
+
+#### Manual browser regression — pending
+
+These browser checks have not been recorded as performed. Do not treat them as
+passed until run and reported.
+
+- Create and edit Jobs; test missing required fields, invalid source URLs, and
+  optional description, source URL, and notes.
+- Search each supported field; check case-insensitive and partial matches,
+  surrounding whitespace, the result count, and the clear-search control.
+- Switch between Active and Archived while searching; verify filtering,
+  updated-time sorting with created-time tie-breaking, status-specific empty
+  states, and the no-search-matches state.
+- Open a Job's details and return to the list; confirm the selected filter and
+  search query remain unchanged.
+- Archive an active Job and reactivate an archived Job; confirm each appears
+  under the corresponding filter without losing its other displayed details.
+- Start deletion for an active and an archived Job. Confirm Cancel and Escape
+  do not delete; confirm the warning explains the Job/Requirements/mapping
+  cascade and explicitly states that Achievement and Employment History
+  records remain. Confirm deletion removes the Job and returns to a correctly
+  updated list.
+- Reload after create, edit, archive, reactivate, and delete to check
+  persistence.
+- Use keyboard-only navigation to check visible focus, dialog initial focus,
+  cancellation focus restoration, and post-deletion focus. Check narrow
+  responsive widths, long text, horizontal overflow, and browser-console
+  errors.
 
 ### CP-021 — Requirements
 

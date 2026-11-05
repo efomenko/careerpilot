@@ -689,20 +689,300 @@
         </dialog>
 
         <section
-          class="placeholder-view"
+          class="job-view"
           data-page-view="jobs"
           aria-labelledby="jobs-title"
           hidden
         >
-          <div class="placeholder-card">
-            <p class="eyebrow">YOUR NEXT OPPORTUNITY</p>
-            <h1 id="jobs-title">Job Opportunities</h1>
-            <p class="placeholder-description">
-              A future space for saved jobs and the requirements you want to explore.
+          <section class="job-panel" id="job-list-panel" data-job-panel="list">
+            <div class="job-heading">
+              <div>
+                <p class="eyebrow">YOUR NEXT OPPORTUNITY</p>
+                <h1 id="jobs-title" tabindex="-1">Jobs</h1>
+                <p class="job-description">
+                  Save the roles you want to explore and keep your notes together.
+                </p>
+              </div>
+              <button
+                class="profile-submit"
+                id="job-create-action"
+                data-job-action="create"
+                type="button"
+                aria-describedby="job-controls-note"
+              >
+                Create Job
+              </button>
+            </div>
+            <p class="job-controls-note" id="job-controls-note">
+              Create Jobs here. Open a Job to view its details and manage its status.
             </p>
-            <p class="coming-soon">Coming soon</p>
-          </div>
+
+            <div class="job-list-controls">
+              <fieldset class="job-filter" id="job-filter">
+                <legend class="job-filter-legend">Show</legend>
+                <div class="job-filter-options">
+                  <label class="job-filter-option">
+                    <input type="radio" name="job-filter" value="active" checked>
+                    <span>Active</span>
+                  </label>
+                  <label class="job-filter-option">
+                    <input type="radio" name="job-filter" value="archived">
+                    <span>Archived</span>
+                  </label>
+                </div>
+              </fieldset>
+              <div class="job-search">
+                <label class="job-search-label" for="job-search-input">Search jobs</label>
+                <div class="job-search-control">
+                  <input
+                    class="job-search-input"
+                    id="job-search-input"
+                    type="search"
+                    placeholder="Search jobs by company, role, description, or notes"
+                  >
+                  <button
+                    class="job-search-clear"
+                    id="job-search-clear"
+                    type="button"
+                    aria-label="Clear job search"
+                    hidden
+                  >Clear</button>
+                </div>
+              </div>
+            </div>
+
+            <p class="job-result-count" id="job-result-count" role="status" aria-live="polite"></p>
+            <div
+              class="job-list"
+              id="job-list"
+              role="list"
+              aria-label="Jobs"
+            ></div>
+            <div class="job-empty" id="job-empty">
+              <p id="job-empty-message">
+                No active Jobs yet. Active Jobs will appear here when available.
+              </p>
+              <button
+                class="profile-submit"
+                id="job-empty-create-action"
+                data-job-action="create"
+                type="button"
+                aria-describedby="job-controls-note"
+              >
+                Create Job
+              </button>
+            </div>
+            <p class="job-empty" id="job-filter-empty" hidden>
+              No Jobs match the selected view.
+            </p>
+            <div class="job-empty job-search-empty" id="job-search-empty" hidden>
+              <p>No jobs match your search.</p>
+              <button class="job-action" id="job-search-empty-clear" type="button">
+                Clear search
+              </button>
+            </div>
+          </section>
+
+          <section
+            class="job-panel"
+            id="job-detail-panel"
+            data-job-panel="detail"
+            data-job-id=""
+            aria-labelledby="job-detail-title"
+            hidden
+          >
+            <p class="job-controls-note" id="job-detail-controls-note">
+              Deleting a Job also removes its Requirements and associated achievement mappings.
+              Achievement and Employment History records remain.
+            </p>
+            <button
+              class="job-action job-back-action"
+              id="job-back-action"
+              data-job-action="back"
+              type="button"
+            >
+              <span aria-hidden="true">←</span> Back to Jobs
+            </button>
+
+            <header class="job-detail-header">
+              <p class="eyebrow">JOB DETAILS</p>
+              <h2 class="job-detail-title" id="job-detail-title" tabindex="-1"></h2>
+              <p class="job-detail-company" id="job-detail-company"></p>
+              <p class="job-detail-status">
+                <span class="job-detail-label">Status:</span>
+                <span class="job-status" id="job-detail-status"></span>
+              </p>
+            </header>
+
+            <div class="job-detail-actions">
+              <button
+                class="job-action"
+                id="job-edit-action"
+                data-job-action="edit"
+                type="button"
+              >
+                Edit
+              </button>
+              <button
+                class="job-action"
+                id="job-archive-action"
+                data-job-action="toggle-archive"
+                type="button"
+              >
+                Archive
+              </button>
+              <button
+                class="job-action job-action--delete"
+                id="job-delete-action"
+                data-job-action="delete"
+                type="button"
+                aria-describedby="job-detail-controls-note"
+              >
+                Delete
+              </button>
+            </div>
+
+            <section class="job-detail-section" aria-labelledby="job-description-title">
+              <h3 id="job-description-title">Description</h3>
+              <p class="job-detail-text" id="job-detail-description"></p>
+            </section>
+
+            <section class="job-detail-section" aria-labelledby="job-source-url-title">
+              <h3 id="job-source-url-title">Source URL</h3>
+              <p class="job-detail-text" id="job-detail-source-url"></p>
+            </section>
+
+            <section class="job-detail-section" aria-labelledby="job-notes-title">
+              <h3 id="job-notes-title">Notes</h3>
+              <p class="job-detail-text" id="job-detail-notes"></p>
+            </section>
+
+            <dl class="job-detail-meta">
+              <div>
+                <dt>Created</dt>
+                <dd id="job-detail-created"></dd>
+              </div>
+              <div>
+                <dt>Updated</dt>
+                <dd id="job-detail-updated"></dd>
+              </div>
+            </dl>
+
+            <section class="job-requirements" aria-labelledby="job-requirements-title">
+              <h3 id="job-requirements-title">Requirements</h3>
+              <p>
+                Requirement management will be available in a future update.
+                Requirements you add to this Job will appear here.
+              </p>
+            </section>
+          </section>
         </section>
+
+        <dialog
+          class="job-delete-dialog"
+          id="job-delete-dialog"
+          aria-labelledby="job-delete-dialog-title"
+          aria-describedby="job-delete-dialog-description"
+        >
+          <h2 id="job-delete-dialog-title">Delete this Job?</h2>
+          <p id="job-delete-dialog-description">
+            This will permanently delete this Job and all Requirements and achievement mappings
+            associated with it. Achievement records and Employment History records will not be deleted.
+          </p>
+          <div class="job-delete-dialog-actions">
+            <button class="job-action" id="job-delete-cancel" type="button">
+              Cancel
+            </button>
+            <button
+              class="job-action job-action--delete"
+              id="job-delete-confirm"
+              type="button"
+            >
+              Delete Job
+            </button>
+          </div>
+        </dialog>
+
+        <dialog
+          class="job-dialog"
+          id="job-dialog"
+          aria-labelledby="job-dialog-title"
+          aria-describedby="job-dialog-description"
+        >
+          <h2 id="job-dialog-title">Create or edit a Job</h2>
+          <p id="job-dialog-description">
+            Add the role details you want to keep with this opportunity.
+          </p>
+          <form class="job-form" id="job-form" novalidate>
+            <h3 class="job-form-title" id="job-form-title">Create Job</h3>
+
+            <div class="job-form-fields">
+              <div class="profile-field">
+                <label for="job-company">Company <span aria-hidden="true">*</span></label>
+                <input
+                  id="job-company"
+                  name="company"
+                  type="text"
+                  autocomplete="organization"
+                  aria-describedby="job-company-error"
+                  required
+                >
+                <p class="profile-field-error" id="job-company-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="job-role-title">Role title <span aria-hidden="true">*</span></label>
+                <input
+                  id="job-role-title"
+                  name="roleTitle"
+                  type="text"
+                  aria-describedby="job-role-title-error"
+                  required
+                >
+                <p class="profile-field-error" id="job-role-title-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="job-description">Description</label>
+                <textarea
+                  id="job-description"
+                  name="description"
+                  rows="5"
+                  aria-describedby="job-description-error"
+                ></textarea>
+                <p class="profile-field-error" id="job-description-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="job-source-url">Source URL</label>
+                <input
+                  id="job-source-url"
+                  name="sourceUrl"
+                  type="url"
+                  inputmode="url"
+                  aria-describedby="job-source-url-error"
+                >
+                <p class="profile-field-error" id="job-source-url-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="job-notes">Notes</label>
+                <textarea
+                  id="job-notes"
+                  name="notes"
+                  rows="4"
+                  aria-describedby="job-notes-error"
+                ></textarea>
+                <p class="profile-field-error" id="job-notes-error" hidden></p>
+              </div>
+            </div>
+
+            <div class="profile-form-actions">
+              <button class="profile-submit" id="job-submit" type="submit">Create Job</button>
+              <button class="achievement-cancel" id="job-cancel" type="button">Cancel</button>
+            </div>
+          </form>
+        </dialog>
 
         <section
           class="placeholder-view"

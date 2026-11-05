@@ -3,17 +3,26 @@ import {
   validateEmploymentRecord
 } from "./career-model.js";
 import { validateAchievementRecord } from "./achievement-model.js";
+import { validateJobRecord } from "./job-model.js";
 
 const STORAGE_KEY = "careerpilot.state";
-const SCHEMA_VERSION = 1;
-const snapshotFields = ["profile", "employmentRecords", "achievementRecords"];
-const envelopeFields = ["version", ...snapshotFields];
+const SCHEMA_VERSION = 2;
+const v1SnapshotFields = ["profile", "employmentRecords", "achievementRecords"];
+const snapshotFields = [
+  ...v1SnapshotFields,
+  "jobs",
+  "requirements",
+  "achievementMappings"
+];
 
 function emptySnapshot() {
   return {
     profile: null,
     employmentRecords: [],
-    achievementRecords: []
+    achievementRecords: [],
+    jobs: [],
+    requirements: [],
+    achievementMappings: []
   };
 }
 
@@ -388,8 +397,94 @@ function validateRecordArray(records, field, recordType, validator, errors) {
   return validatedRecords;
 }
 
-function validateSnapshot(snapshot) {
+function validatePlainObjectArray(records, field, recordType, errors) {
+  let keys;
+  let length;
+  try {
+    if (!Array.isArray(records)) {
+      addError(errors, { field, path: field, message: "Must be an array." });
+      return;
+    }
+    if (Object.getPrototypeOf(records) !== Array.prototype) {
+      addError(errors, {
+        field,
+        path: field,
+        message: "Record collections must use the standard Array.prototype."
+      });
+      return;
+    }
+    keys = Reflect.ownKeys(records);
+    length = records.length;
+  } catch {
+    addError(errors, {
+      field,
+      path: field,
+      message: "Array properties could not be inspected safely."
+    });
+    return;
+  }
+
+  const indices = [];
+  for (const key of keys) {
+    if (key === "length") {
+      continue;
+    }
+    const index = typeof key === "string" ? Number(key) : NaN;
+    if (
+      !Number.isSafeInteger(index)
+      || index < 0
+      || index >= length
+      || String(index) !== key
+    ) {
+      addError(errors, {
+        field,
+        path: `${field}.${String(key)}`,
+        message: "Record arrays may contain only indexed elements."
+      });
+    } else {
+      indices.push(index);
+    }
+  }
+  if (indices.length !== length) {
+    addError(errors, {
+      field,
+      path: field,
+      message: "Record arrays must be dense."
+    });
+    return;
+  }
+
+  indices.sort((first, second) => first - second);
+  for (const index of indices) {
+    const path = `${field}[${index}]`;
+    let descriptor;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(records, String(index));
+    } catch {
+      addError(errors, {
+        recordType,
+        field: path,
+        path,
+        message: "Record could not be inspected safely."
+      });
+      continue;
+    }
+    if (!descriptor?.enumerable || !("value" in descriptor)) {
+      addError(errors, {
+        recordType,
+        field: path,
+        path,
+        message: "Record arrays must contain enumerable data properties."
+      });
+      continue;
+    }
+    inspectRecordObject(descriptor.value, recordType, index, errors);
+  }
+}
+
+function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
   const errors = [];
+  const fields = version === 1 ? v1SnapshotFields : snapshotFields;
   let snapshotIsPlainObject = false;
 
   try {
@@ -413,7 +508,7 @@ function validateSnapshot(snapshot) {
 
   try {
     const keys = Reflect.ownKeys(snapshot);
-    const expected = new Set(snapshotFields);
+    const expected = new Set(fields);
     for (const key of keys) {
       if (typeof key !== "string" || !expected.has(key)) {
         addError(errors, {
@@ -423,7 +518,7 @@ function validateSnapshot(snapshot) {
         });
       }
     }
-    for (const field of snapshotFields) {
+    for (const field of fields) {
       if (!Object.hasOwn(snapshot, field)) {
         addError(errors, {
           field,
@@ -453,10 +548,21 @@ function validateSnapshot(snapshot) {
   let profile;
   let employmentRecords;
   let achievementRecords;
+  let jobs = [];
+  let requirements = [];
+  let achievementMappings = [];
   try {
     profile = Object.getOwnPropertyDescriptor(snapshot, "profile")?.value;
     employmentRecords = Object.getOwnPropertyDescriptor(snapshot, "employmentRecords")?.value;
     achievementRecords = Object.getOwnPropertyDescriptor(snapshot, "achievementRecords")?.value;
+    if (version === SCHEMA_VERSION) {
+      jobs = Object.getOwnPropertyDescriptor(snapshot, "jobs")?.value;
+      requirements = Object.getOwnPropertyDescriptor(snapshot, "requirements")?.value;
+      achievementMappings = Object.getOwnPropertyDescriptor(
+        snapshot,
+        "achievementMappings"
+      )?.value;
+    }
   } catch {
     addError(errors, {
       field: "snapshot",
@@ -516,6 +622,18 @@ function validateSnapshot(snapshot) {
     validateAchievementRecord,
     errors
   );
+  const validJobs = version === SCHEMA_VERSION
+    ? validateRecordArray(jobs, "jobs", "job", validateJobRecord, errors)
+    : [];
+  if (version === SCHEMA_VERSION) {
+    validatePlainObjectArray(requirements, "requirements", "requirement", errors);
+    validatePlainObjectArray(
+      achievementMappings,
+      "achievementMappings",
+      "achievement mapping",
+      errors
+    );
+  }
   const employmentIds = new Set(validEmploymentRecords.map((record) => record.id));
 
   for (let index = 0; index < validAchievementRecords.length; index += 1) {
@@ -535,7 +653,16 @@ function validateSnapshot(snapshot) {
   return {
     valid: errors.length === 0,
     errors,
-    snapshot: { profile, employmentRecords, achievementRecords }
+    snapshot: version === 1
+      ? { profile, employmentRecords, achievementRecords }
+      : {
+        profile,
+        employmentRecords,
+        achievementRecords,
+        jobs: validJobs,
+        requirements,
+        achievementMappings
+      }
   };
 }
 
@@ -705,7 +832,7 @@ function validateEvidence(snapshot) {
   return errors;
 }
 
-function validateEnvelope(envelope) {
+function validateEnvelope(envelope, version) {
   if (!isPlainObject(envelope)) {
     return [{
       field: "envelope",
@@ -726,6 +853,12 @@ function validateEnvelope(envelope) {
     }];
   }
 
+  const fields = version === 1
+    ? v1SnapshotFields
+    : version === SCHEMA_VERSION
+      ? snapshotFields
+      : [];
+  const envelopeFields = ["version", ...fields];
   const expected = new Set(envelopeFields);
   for (const key of keys) {
     if (typeof key !== "string" || !expected.has(key)) {
@@ -770,11 +903,12 @@ function makeCorruptError(errors) {
  * Public API:
  * - load(): return `missing`, `loaded`, `corrupt`, `unsupported-version`, or
  *   `unavailable`, with a validated snapshot where applicable.
- * - save({ profile, employmentRecords, achievementRecords }): validate and
- *   persist the complete version-1 envelope, returning a status result.
+ * - save(snapshot): validate and persist the complete version-2 envelope,
+ *   returning a status result.
  *
- * Corrupt or unsupported stored data disables writes for this adapter
- * instance. No application state or browser globals are used.
+ * Valid version-1 snapshots are returned as version-2 data in memory. Loading
+ * never writes storage; corrupt or unsupported data disables writes for this
+ * adapter instance.
  */
 export function createCareerStorage(storage) {
   if (
@@ -832,33 +966,51 @@ export function createCareerStorage(storage) {
         };
       }
 
-      const envelopeErrors = validateEnvelope(envelope);
-      if (envelopeErrors.length > 0) {
+      if (!isPlainObject(envelope)) {
         writesDisabled = true;
         return {
           status: "corrupt",
-          error: makeCorruptError(envelopeErrors),
+          error: makeCorruptError(validateEnvelope(envelope, undefined)),
           writesDisabled: true
         };
       }
 
       let version;
-      let snapshot;
       try {
-        version = Object.getOwnPropertyDescriptor(envelope, "version").value;
-        snapshot = {
-          profile: Object.getOwnPropertyDescriptor(envelope, "profile").value,
-          employmentRecords: Object.getOwnPropertyDescriptor(envelope, "employmentRecords").value,
-          achievementRecords: Object.getOwnPropertyDescriptor(envelope, "achievementRecords").value
-        };
+        const descriptor = Object.getOwnPropertyDescriptor(envelope, "version");
+        if (!descriptor) {
+          writesDisabled = true;
+          return {
+            status: "corrupt",
+            error: makeCorruptError([{
+              field: "envelope.version",
+              path: "envelope.version",
+              message: "Stored envelope property is required."
+            }]),
+            writesDisabled: true
+          };
+        }
+        if (!descriptor.enumerable || !("value" in descriptor)) {
+          writesDisabled = true;
+          return {
+            status: "corrupt",
+            error: makeCorruptError([{
+              field: "envelope.version",
+              path: "envelope.version",
+              message: "Stored envelope properties must be enumerable data properties."
+            }]),
+            writesDisabled: true
+          };
+        }
+        version = descriptor.value;
       } catch {
         writesDisabled = true;
         return {
           status: "corrupt",
           error: makeCorruptError([{
-            field: "envelope",
-            path: "envelope",
-            message: "Stored envelope values could not be read safely."
+            field: "version",
+            path: "version",
+            message: "Envelope version could not be read safely."
           }]),
           writesDisabled: true
         };
@@ -876,12 +1028,41 @@ export function createCareerStorage(storage) {
           writesDisabled: true
         };
       }
-      if (version !== SCHEMA_VERSION) {
+      if (version !== 1 && version !== SCHEMA_VERSION) {
         writesDisabled = true;
         return { status: "unsupported-version", version, writesDisabled: true };
       }
 
-      const validation = validateSnapshot(snapshot);
+      const envelopeErrors = validateEnvelope(envelope, version);
+      if (envelopeErrors.length > 0) {
+        writesDisabled = true;
+        return {
+          status: "corrupt",
+          error: makeCorruptError(envelopeErrors),
+          writesDisabled: true
+        };
+      }
+
+      let snapshot;
+      try {
+        snapshot = {};
+        for (const field of version === 1 ? v1SnapshotFields : snapshotFields) {
+          snapshot[field] = Object.getOwnPropertyDescriptor(envelope, field).value;
+        }
+      } catch {
+        writesDisabled = true;
+        return {
+          status: "corrupt",
+          error: makeCorruptError([{
+            field: "envelope",
+            path: "envelope",
+            message: "Stored envelope values could not be read safely."
+          }]),
+          writesDisabled: true
+        };
+      }
+
+      const validation = validateSnapshot(snapshot, version);
       if (!validation.valid) {
         writesDisabled = true;
         return {
@@ -901,7 +1082,15 @@ export function createCareerStorage(storage) {
         };
       }
 
-      return { status: "loaded", snapshot: validation.snapshot };
+      const migratedSnapshot = version === 1
+        ? {
+          ...validation.snapshot,
+          jobs: [],
+          requirements: [],
+          achievementMappings: []
+        }
+        : validation.snapshot;
+      return { status: "loaded", snapshot: migratedSnapshot };
     },
 
     save(snapshot) {
@@ -925,7 +1114,10 @@ export function createCareerStorage(storage) {
           version: SCHEMA_VERSION,
           profile: validation.snapshot.profile,
           employmentRecords: validation.snapshot.employmentRecords,
-          achievementRecords: validation.snapshot.achievementRecords
+          achievementRecords: validation.snapshot.achievementRecords,
+          jobs: validation.snapshot.jobs,
+          requirements: validation.snapshot.requirements,
+          achievementMappings: validation.snapshot.achievementMappings
         });
       } catch {
         return {

@@ -59,8 +59,40 @@ function snapshot(overrides = {}) {
     achievementRecords: [achievement("achievement-1", {
       employmentId: "employment-1"
     })],
+    jobs: [],
+    requirements: [],
+    achievementMappings: [],
     ...overrides
   };
+}
+
+function job(id = "job-1", overrides = {}) {
+  return {
+    id,
+    company: "Example Company",
+    roleTitle: "Engineer",
+    description: "",
+    sourceUrl: "",
+    notes: "",
+    status: "active",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    ...overrides
+  };
+}
+
+const snapshotKeys = [
+  "profile",
+  "employmentRecords",
+  "achievementRecords",
+  "jobs",
+  "requirements",
+  "achievementMappings"
+];
+
+function v1Snapshot() {
+  const { jobs, requirements, achievementMappings, ...v1 } = snapshot();
+  return v1;
 }
 
 function createFakeStorage(initialValue = null) {
@@ -98,7 +130,7 @@ function createFakeStorage(initialValue = null) {
   };
 }
 
-function stored(value = snapshot(), version = 1) {
+function stored(value = snapshot(), version = 2) {
   return JSON.stringify({ version, ...value });
 }
 
@@ -134,7 +166,7 @@ test("valid data is restored before the function returns", () => {
 test("corrupt and unsupported data produce persistent warnings and are not overwritten", () => {
   for (const [raw, kind] of [
     ["not valid JSON", "corrupt"],
-    [stored(snapshot(), 2), "unsupported-version"]
+    [stored(snapshot(), 3), "unsupported-version"]
   ]) {
     const fake = createFakeStorage(raw);
     const persistence = createCareerPersistence(fake);
@@ -214,7 +246,14 @@ test("unexpected restore failure discards the partially restored state", () => {
             throw new Error("partial restore");
           },
           getSnapshot() {
-            return { profile: null, employmentRecords: [], achievementRecords: [] };
+            return {
+              profile: null,
+              employmentRecords: [],
+              achievementRecords: [],
+              jobs: [],
+              requirements: [],
+              achievementMappings: []
+            };
           }
         };
       }
@@ -234,7 +273,10 @@ test("unexpected restore failure discards the partially restored state", () => {
           onMutation(() => ({
             profile: currentProfile,
             employmentRecords: [],
-            achievementRecords: []
+            achievementRecords: [],
+            jobs: [],
+            requirements: [],
+            achievementMappings: []
           }));
           return currentProfile;
         },
@@ -273,10 +315,160 @@ test("successful mutations save the complete post-mutation snapshot", () => {
 
   const saved = JSON.parse(fake.values.get(storageKey));
   assert.equal(result.id, "profile-saved");
-  assert.equal(saved.version, 1);
+  assert.equal(saved.version, 2);
+  assert.deepEqual(Object.keys(saved), ["version", ...snapshotKeys]);
   assert.deepEqual(saved.profile, persistence.state.getProfile());
   assert.deepEqual(saved.employmentRecords, []);
   assert.deepEqual(saved.achievementRecords, []);
+  assert.deepEqual(saved.jobs, []);
+  assert.deepEqual(saved.requirements, []);
+  assert.deepEqual(saved.achievementMappings, []);
+});
+
+test("restores a complete six-property v2 snapshot without writing", () => {
+  const data = snapshot({
+    jobs: [job("job-1"), job("job-2", { status: "archived" })],
+    requirements: [{ id: "requirement-1", jobId: "job-1", text: "Requirement" }],
+    achievementMappings: [{
+      id: "mapping-1",
+      requirementId: "requirement-1",
+      achievementId: "achievement-1"
+    }]
+  });
+  const fake = createFakeStorage(stored(data));
+  const persistence = createCareerPersistence(fake);
+
+  assert.deepEqual(persistence.state.getSnapshot(), data);
+  assert.deepEqual(persistence.state.getJobs(), data.jobs);
+  assert.deepEqual(fake.calls.setItem, []);
+  assert.deepEqual(persistence.getStatus(), {
+    persistentWarning: null,
+    transientWarning: null
+  });
+});
+
+test("restores profile null and empty new collections", () => {
+  const data = snapshot({ profile: null });
+  const persistence = createCareerPersistence(createFakeStorage(stored(data)));
+
+  assert.equal(persistence.state.getProfile(), null);
+  assert.deepEqual(persistence.state.getSnapshot(), data);
+  assert.deepEqual(persistence.state.getJobs(), []);
+});
+
+test("valid v1 data is restored as migrated v2 without warning or write", () => {
+  const raw = stored(v1Snapshot(), 1);
+  const fake = createFakeStorage(raw);
+  const persistence = createCareerPersistence(fake);
+
+  assert.deepEqual(persistence.state.getSnapshot(), snapshot());
+  assert.deepEqual(persistence.getStatus(), {
+    persistentWarning: null,
+    transientWarning: null
+  });
+  assert.deepEqual(fake.calls.setItem, []);
+  assert.equal(fake.values.get(storageKey), raw);
+});
+
+test("v1 data stays intact until a successful mutation saves complete v2", () => {
+  const raw = stored(v1Snapshot(), 1);
+  const fake = createFakeStorage(raw);
+  const persistence = createCareerPersistence(fake);
+
+  fake.setError = new Error("write failure");
+  persistence.state.createJob(job("job-1"));
+  assert.equal(fake.values.get(storageKey), raw);
+  assert.equal(persistence.state.getJobs().length, 1);
+  assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
+  assert.equal(persistence.getStatus().persistentWarning, null);
+
+  fake.setError = null;
+  persistence.state.createJob(job("job-2"));
+  const saved = JSON.parse(fake.values.get(storageKey));
+  assert.equal(saved.version, 2);
+  assert.deepEqual(Object.keys(saved), ["version", ...snapshotKeys]);
+  assert.deepEqual(saved.jobs.map((record) => record.id), ["job-1", "job-2"]);
+  assert.deepEqual(saved.employmentRecords, snapshot().employmentRecords);
+  assert.equal(persistence.getStatus().transientWarning, null);
+});
+
+test("job create, update, archive, reactivate, and delete are persisted", () => {
+  const fake = createFakeStorage();
+  const { state } = createCareerPersistence(fake);
+  const savedJobs = () => JSON.parse(fake.values.get(storageKey)).jobs;
+  const later = "2025-04-21T10:00:00.000Z";
+
+  state.createJob(job("job-1"));
+  assert.deepEqual(savedJobs(), [job("job-1")]);
+
+  state.updateJob("job-1", { company: "Other", updatedAt: later });
+  assert.equal(savedJobs()[0].company, "Other");
+
+  state.archiveJob("job-1", later);
+  assert.equal(savedJobs()[0].status, "archived");
+
+  state.reactivateJob("job-1", later);
+  assert.equal(savedJobs()[0].status, "active");
+
+  state.deleteJob("job-1");
+  assert.deepEqual(savedJobs(), []);
+});
+
+test("no-op job updates do not write", () => {
+  const fake = createFakeStorage();
+  const { state } = createCareerPersistence(fake);
+  state.createJob(job("job-1"));
+  const writes = fake.calls.setItem.length;
+
+  state.updateJob("job-1", { company: "Example Company" });
+  assert.equal(fake.calls.setItem.length, writes);
+});
+
+test("saves keep jobs, requirements, and mappings from restored state", () => {
+  const data = snapshot({
+    jobs: [job("job-1")],
+    requirements: [{ id: "requirement-1", jobId: "job-1" }],
+    achievementMappings: [{ id: "mapping-1", requirementId: "requirement-1" }]
+  });
+  const fake = createFakeStorage(stored(data));
+  const persistence = createCareerPersistence(fake);
+
+  persistence.state.updateProfile({
+    fullName: "Updated",
+    headline: "",
+    summary: "",
+    skills: []
+  }, timestamp);
+  const saved = JSON.parse(fake.values.get(storageKey));
+  assert.equal(saved.profile.fullName, "Updated");
+  assert.deepEqual(saved.jobs, data.jobs);
+  assert.deepEqual(saved.requirements, data.requirements);
+  assert.deepEqual(saved.achievementMappings, data.achievementMappings);
+  assert.equal("fitAssessments" in saved, false);
+});
+
+test("current v2 envelopes load without a warning", () => {
+  const fake = createFakeStorage(stored(snapshot(), 2));
+  const persistence = createCareerPersistence(fake);
+
+  assert.equal(persistence.getStatus().persistentWarning, null);
+});
+
+test("corrupt v2 data and unsupported future versions are never overwritten by job mutations", () => {
+  for (const [raw, kind] of [
+    [stored({ ...snapshot(), jobs: "bad" }, 2), "corrupt"],
+    [stored(snapshot(), 3), "unsupported-version"]
+  ]) {
+    const fake = createFakeStorage(raw);
+    const persistence = createCareerPersistence(fake);
+
+    assert.equal(persistence.getStatus().persistentWarning.kind, kind);
+    persistence.state.createJob(job("job-1"));
+    assert.equal(fake.values.get(storageKey), raw);
+    assert.equal(persistence.state.getJobs().length, 1);
+    assert.equal(persistence.getStatus().persistentWarning.kind, kind);
+    assert.equal(persistence.getStatus().transientWarning.kind, "write-disabled");
+  }
 });
 
 test("verification changes and employment deletion are persisted correctly", () => {
@@ -342,7 +534,8 @@ test("failed writes preserve in-memory mutations and a later save clears the war
 test("successful saves never clear corrupt or unsupported warnings", () => {
   for (const [raw, kind] of [
     ["bad JSON", "corrupt"],
-    [stored(snapshot(), 99), "unsupported-version"]
+    [stored(snapshot(), 99), "unsupported-version"],
+    [stored(snapshot(), 3), "unsupported-version"]
   ]) {
     const fake = createFakeStorage(raw);
     const persistence = createCareerPersistence(fake);
@@ -516,7 +709,14 @@ test("each mutation invokes the snapshot accessor exactly once", () => {
       mutate() {
         onMutation(() => {
           calls += 1;
-          return { profile: null, employmentRecords: [], achievementRecords: [] };
+          return {
+            profile: null,
+            employmentRecords: [],
+            achievementRecords: [],
+            jobs: [],
+            requirements: [],
+            achievementMappings: []
+          };
         });
       }
     })

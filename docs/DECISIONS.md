@@ -118,6 +118,13 @@ Evidence values that cannot be represented faithfully by JSON are rejected at th
 
 **Next step:** Continue reviewing schemas for records beyond the Career Profile and Employment History before their implementation tasks.
 
+**CP-020 follow-up — 2026-11-05:** CP-020 establishes the implemented Job
+record schema documented in `TECHNICAL_DESIGN.md` and validated by
+`src/js/job-model.js`. This clarifies the Job portion of the original proposal;
+it does not finalize Requirement, draft, or application schemas. Requirements
+and achievement-mapping collections support state and persistence
+relationships, but their user-facing management workflows are outside CP-020.
+
 ### DEC-013 — Define Career Profile and Employment History schemas
 
 **Status:** Confirmed
@@ -132,7 +139,10 @@ Evidence values that cannot be represented faithfully by JSON are rejected at th
 - Validation is pure and reports field-specific errors without mutating records.
 - Focused model tests use Node.js's built-in test runner through `npm test`; no third-party test framework is added.
 - Verification and approval fields are not part of these CP-010 schemas. Their behavior remains governed by later verification and approval work, including the existing distinction in DEC-009.
-- Schemas for jobs, requirements, drafts, and applications remain proposals until their respective decisions are made. The achievement schema is confirmed by DEC-014.
+- At the time of DEC-013, schemas for jobs, requirements, drafts, and
+  applications remained proposals. CP-020 has since established the Job
+  record schema; Requirements, drafts, and applications remain proposals.
+  The achievement schema is confirmed by DEC-014.
 
 ### DEC-014 — Define the CP-012 Achievement Record Contract
 

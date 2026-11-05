@@ -52,7 +52,34 @@ function achievementRecord(overrides = {}) {
   };
 }
 
+function jobRecord(overrides = {}) {
+  return {
+    id: "job-1",
+    company: "Example Company",
+    roleTitle: "Engineer",
+    description: "",
+    sourceUrl: "",
+    notes: "",
+    status: "active",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    ...overrides
+  };
+}
+
 function snapshot(overrides = {}) {
+  return {
+    profile: profileRecord(),
+    employmentRecords: [employmentRecord()],
+    achievementRecords: [achievementRecord()],
+    jobs: [],
+    requirements: [],
+    achievementMappings: [],
+    ...overrides
+  };
+}
+
+function v1Snapshot(overrides = {}) {
   return {
     profile: profileRecord(),
     employmentRecords: [employmentRecord()],
@@ -62,13 +89,11 @@ function snapshot(overrides = {}) {
 }
 
 function envelope(value = snapshot(), overrides = {}) {
-  return {
-    version: 1,
-    profile: value.profile,
-    employmentRecords: value.employmentRecords,
-    achievementRecords: value.achievementRecords,
-    ...overrides
-  };
+  return { version: 2, ...value, ...overrides };
+}
+
+function v1Envelope(value = v1Snapshot(), overrides = {}) {
+  return { version: 1, ...value, ...overrides };
 }
 
 function createFakeStorage(initialValue = null) {
@@ -106,7 +131,7 @@ function createFakeStorage(initialValue = null) {
   };
 }
 
-function stored(value, overrides = {}) {
+function stored(value = snapshot(), overrides = {}) {
   return JSON.stringify(envelope(value, overrides));
 }
 
@@ -116,17 +141,17 @@ test("missing storage returns an empty snapshot", () => {
 
   assert.deepEqual(result, {
     status: "missing",
-    snapshot: {
+    snapshot: snapshot({
       profile: null,
       employmentRecords: [],
       achievementRecords: []
-    }
+    })
   });
   assert.deepEqual(fake.calls.getItem, [storageKey]);
 });
 
-test("loads a valid version-1 envelope without its version property", () => {
-  const data = snapshot();
+test("loads a valid version-2 envelope", () => {
+  const data = snapshot({ jobs: [jobRecord()] });
   const result = createCareerStorage(createFakeStorage(stored(data))).load();
 
   assert.equal(result.status, "loaded");
@@ -134,16 +159,176 @@ test("loads a valid version-1 envelope without its version property", () => {
   assert.deepEqual(Object.keys(result.snapshot), [
     "profile",
     "employmentRecords",
-    "achievementRecords"
+    "achievementRecords",
+    "jobs",
+    "requirements",
+    "achievementMappings"
   ]);
 });
 
-test("loads null profile, empty arrays, and unlinked achievements", () => {
+test("migrates valid empty version-1 snapshots without writing storage", () => {
   const data = {
     profile: null,
     employmentRecords: [],
-    achievementRecords: [achievementRecord()]
+    achievementRecords: []
   };
+  const original = JSON.stringify(v1Envelope(data));
+  const fake = createFakeStorage(original);
+  const result = createCareerStorage(fake).load();
+
+  assert.equal(result.status, "loaded");
+  assert.deepEqual(result.snapshot, snapshot({
+    profile: null,
+    employmentRecords: [],
+    achievementRecords: []
+  }));
+  assert.deepEqual(data, {
+    profile: null,
+    employmentRecords: [],
+    achievementRecords: []
+  });
+  assert.deepEqual(fake.calls.setItem, []);
+  assert.equal(fake.values.get(storageKey), original);
+});
+
+test("migrates populated version-1 snapshots and preserves all existing records", () => {
+  const data = v1Snapshot({
+    achievementRecords: [achievementRecord({
+      employmentId: "employment-1",
+      verificationStatus: "verified"
+    })]
+  });
+  const originalSnapshot = JSON.parse(JSON.stringify(data));
+  const original = JSON.stringify(v1Envelope(data));
+  const fake = createFakeStorage(original);
+  const adapter = createCareerStorage(fake);
+  const result = adapter.load();
+
+  assert.equal(result.status, "loaded");
+  assert.deepEqual(result.snapshot, snapshot({
+    ...originalSnapshot,
+    jobs: [],
+    requirements: [],
+    achievementMappings: []
+  }));
+  assert.deepEqual(data, originalSnapshot);
+  assert.deepEqual(fake.calls.setItem, []);
+  assert.equal(fake.values.get(storageKey), original);
+  fake.setError = new Error("quota exceeded during migration");
+  assert.equal(adapter.save(result.snapshot).status, "write-failed");
+  assert.equal(fake.values.get(storageKey), original);
+  fake.setError = null;
+  assert.equal(adapter.save(result.snapshot).status, "saved");
+  const saved = JSON.parse(fake.values.get(storageKey));
+  assert.equal(saved.version, 2);
+  assert.deepEqual(saved, { version: 2, ...result.snapshot });
+});
+
+test("rejects malformed version-1 snapshots during migration", () => {
+  const invalidSnapshots = [
+    { profile: null, employmentRecords: [] },
+    v1Snapshot({ profile: profileRecord({ fullName: "" }) }),
+    v1Snapshot({ employmentRecords: "not-an-array" }),
+    v1Snapshot({ achievementRecords: [achievementRecord({
+      verificationStatus: "invalid"
+    })] }),
+    v1Snapshot({ extra: true })
+  ];
+
+  for (const data of invalidSnapshots) {
+    const original = JSON.stringify(v1Envelope(data));
+    const fake = createFakeStorage(original);
+    const adapter = createCareerStorage(fake);
+    const result = adapter.load();
+
+    assert.equal(result.status, "corrupt");
+    assert.equal(fake.values.get(storageKey), original);
+    assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
+    assert.deepEqual(fake.calls.setItem, []);
+  }
+});
+
+test("rejects missing and malformed version-2 collections and records", () => {
+  const invalidSnapshots = [
+    {
+      profile: null,
+      employmentRecords: [],
+      achievementRecords: [],
+      requirements: [],
+      achievementMappings: []
+    },
+    {
+      profile: null,
+      employmentRecords: [],
+      achievementRecords: [],
+      jobs: [],
+      achievementMappings: []
+    },
+    {
+      profile: null,
+      employmentRecords: [],
+      achievementRecords: [],
+      jobs: [],
+      requirements: []
+    },
+    snapshot({ jobs: "not-an-array" }),
+    snapshot({ requirements: "not-an-array" }),
+    snapshot({ achievementMappings: "not-an-array" }),
+    snapshot({ requirements: [null] }),
+    snapshot({ requirements: [new Date()] }),
+    snapshot({ achievementMappings: ["mapping"] }),
+    snapshot({ jobs: [jobRecord({ sourceUrl: "relative/path" })] }),
+    snapshot({
+      jobs: [
+        jobRecord(),
+        jobRecord({ company: "Second Company" })
+      ]
+    }),
+    snapshot({ profile: profileRecord({ fullName: "" }) }),
+    snapshot({ employmentRecords: [employmentRecord({ startDate: "bad" })] }),
+    snapshot({ achievementRecords: [achievementRecord({
+      verificationStatus: "invalid"
+    })] }),
+    snapshot({ extra: true }),
+    snapshot({ fitAssessment: { score: 100 } })
+  ];
+
+  for (const data of invalidSnapshots) {
+    const result = createCareerStorage(createFakeStorage(stored(data))).load();
+    assert.equal(result.status, "corrupt");
+    assert.ok(result.error.errors.length > 0);
+  }
+});
+
+test("accepts multiple Jobs and plain-object Requirement and Mapping entries", () => {
+  const data = snapshot({
+    jobs: [
+      jobRecord(),
+      jobRecord({
+        id: "job-2",
+        company: "Other Company",
+        status: "archived"
+      })
+    ],
+    requirements: [{ id: "requirement-1", jobId: "job-1" }],
+    achievementMappings: [{
+      id: "mapping-1",
+      requirementId: "requirement-1",
+      achievementId: "achievement-1"
+    }]
+  });
+  const result = createCareerStorage(createFakeStorage(stored(data))).load();
+
+  assert.equal(result.status, "loaded");
+  assert.deepEqual(result.snapshot, data);
+});
+
+test("loads null profile, empty arrays, and unlinked achievements", () => {
+  const data = snapshot({
+    profile: null,
+    employmentRecords: [],
+    achievementRecords: [achievementRecord()]
+  });
   const result = createCareerStorage(createFakeStorage(stored(data))).load();
 
   assert.deepEqual(result, { status: "loaded", snapshot: data });
@@ -171,7 +356,7 @@ test("rejects stored negative-zero evidence as corrupt", () => {
 
 test("rejects missing and additional envelope properties", () => {
   for (const json of [
-    JSON.stringify({ version: 1, profile: null, employmentRecords: [] }),
+    JSON.stringify({ version: 2, profile: null, employmentRecords: [] }),
     JSON.stringify({ ...envelope(), extra: true })
   ]) {
     const result = createCareerStorage(createFakeStorage(json)).load();
@@ -190,17 +375,19 @@ test("rejects a non-numeric envelope version as corrupt", () => {
 });
 
 test("reports a numeric unsupported version distinctly and disables writes", () => {
-  const fake = createFakeStorage(JSON.stringify(envelope(snapshot(), { version: 2 })));
+  const original = JSON.stringify(envelope(snapshot(), { version: 3 }));
+  const fake = createFakeStorage(original);
   const adapter = createCareerStorage(fake);
   const result = adapter.load();
 
   assert.deepEqual(result, {
     status: "unsupported-version",
-    version: 2,
+    version: 3,
     writesDisabled: true
   });
   assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
   assert.deepEqual(fake.calls.setItem, []);
+  assert.equal(fake.values.get(storageKey), original);
 });
 
 test("rejects invalid profiles with record and model field context", () => {
@@ -278,7 +465,7 @@ test("a throwing getItem returns unavailable without disabling writes", () => {
   assert.equal(adapter.save(snapshot()).status, "saved");
 });
 
-test("saves the exact version-1 envelope with one setItem call", () => {
+test("saves the exact version-2 envelope with one setItem call", () => {
   const fake = createFakeStorage();
   const data = snapshot();
   const result = createCareerStorage(fake).save(data);
@@ -288,13 +475,16 @@ test("saves the exact version-1 envelope with one setItem call", () => {
   assert.equal(fake.calls.setItem[0][0], storageKey);
   const saved = JSON.parse(fake.calls.setItem[0][1]);
   assert.deepEqual(Object.keys(saved).sort(), [
+    "achievementMappings",
     "achievementRecords",
     "employmentRecords",
+    "jobs",
     "profile",
+    "requirements",
     "version"
   ]);
-  assert.equal(saved.version, 1);
-  assert.deepEqual(saved, { version: 1, ...data });
+  assert.equal(saved.version, 2);
+  assert.deepEqual(saved, { version: 2, ...data });
 });
 
 test("invalid snapshots, duplicate IDs, and invalid links are not written", () => {
@@ -504,6 +694,35 @@ test("ordinary model and evidence arrays with valid metrics save and load", () =
   const loaded = adapter.load();
   assert.equal(loaded.status, "loaded");
   assert.deepEqual(loaded.snapshot, data);
+});
+
+test("version-2 serialization round trip preserves all collections without assessments", () => {
+  const data = snapshot({
+    jobs: [jobRecord()],
+    requirements: [{ id: "requirement-1", jobId: "job-1" }],
+    achievementMappings: [{
+      id: "mapping-1",
+      requirementId: "requirement-1",
+      achievementId: "achievement-1"
+    }]
+  });
+  const fake = createFakeStorage();
+  const adapter = createCareerStorage(fake);
+
+  assert.deepEqual(adapter.save(data), { status: "saved" });
+  const envelopeData = JSON.parse(fake.values.get(storageKey));
+  assert.equal(envelopeData.version, 2);
+  assert.deepEqual(Object.keys(envelopeData).sort(), [
+    "achievementMappings",
+    "achievementRecords",
+    "employmentRecords",
+    "jobs",
+    "profile",
+    "requirements",
+    "version"
+  ]);
+  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data });
+  assert.equal(Object.hasOwn(envelopeData, "fitAssessment"), false);
 });
 
 test("save does not delete the previous stored value before writing", () => {
