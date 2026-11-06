@@ -4,6 +4,7 @@ import { createDialogManager } from "./dialogs.js";
 import { createNavigationController } from "./navigation.js";
 import { createNotifications } from "./notifications.js";
 import { createJobRecord } from "./job-model.js";
+import { createRequirementRecord } from "./requirement-model.js";
 import { getJobListResults } from "./job-ui-helpers.js";
 import { clearFieldError, showFieldError } from "./feedback.js";
 import { validateRequired } from "./validation.js";
@@ -167,6 +168,29 @@ const jobDetailSourceUrl = document.querySelector("#job-detail-source-url");
 const jobDetailNotes = document.querySelector("#job-detail-notes");
 const jobDetailCreated = document.querySelector("#job-detail-created");
 const jobDetailUpdated = document.querySelector("#job-detail-updated");
+const jobRequirementsList = document.querySelector("#job-requirements-list");
+const jobRequirementsEmpty = document.querySelector("#job-requirements-empty");
+const requirementAddAction = document.querySelector("#requirement-add-action");
+const requirementDialog = document.querySelector("#requirement-dialog");
+const requirementForm = document.querySelector("#requirement-form");
+const requirementFormTitle = document.querySelector("#requirement-form-title");
+const requirementSubmit = document.querySelector("#requirement-submit");
+const requirementCancel = document.querySelector("#requirement-cancel");
+const requirementDeleteDialog = document.querySelector("#requirement-delete-dialog");
+const requirementDeleteDescription = document.querySelector("#requirement-delete-description");
+const requirementDeleteCancel = document.querySelector("#requirement-delete-cancel");
+const requirementDeleteConfirm = document.querySelector("#requirement-delete-confirm");
+const requirementControls = {
+  description: document.querySelector("#requirement-description"),
+  category: document.querySelector("#requirement-category"),
+  importance: document.querySelector("#requirement-importance")
+};
+const requirementFieldErrors = {
+  description: document.querySelector("#requirement-description-error"),
+  category: document.querySelector("#requirement-category-error"),
+  importance: document.querySelector("#requirement-importance-error")
+};
+const requirementFields = Object.keys(requirementControls);
 const jobDeleteAction = document.querySelector("#job-delete-action");
 const jobDeleteDialog = document.querySelector("#job-delete-dialog");
 const jobDeleteCancel = document.querySelector("#job-delete-cancel");
@@ -213,6 +237,11 @@ let editingJobId = null;
 let jobFormSnapshot = "";
 let pendingJobDeletionId = null;
 let isDeletingJob = false;
+let editingRequirementId = null;
+let editingRequirementJobId = null;
+let requirementFormSnapshot = "";
+let pendingRequirementDeletion = null;
+let isDeletingRequirement = false;
 
 // Each view supplies the label and status shown when its hash is selected.
 const views = {
@@ -671,6 +700,357 @@ function formatJobTimestamp(value) {
   return new Date(value).toLocaleString();
 }
 
+function formatRequirementCategory(category) {
+  return category[0].toUpperCase() + category.slice(1);
+}
+
+function renderJobRequirements(jobId) {
+  const records = careerState.getRequirements(jobId);
+  jobRequirementsList.replaceChildren();
+  jobRequirementsEmpty.hidden = records.length > 0;
+
+  records.forEach((record) => {
+    const article = document.createElement("article");
+    article.className = "job-requirement";
+    article.dataset.requirementId = record.id;
+    article.setAttribute("role", "listitem");
+
+    const description = document.createElement("p");
+    description.className = "job-requirement__description";
+    description.textContent = record.description;
+
+    const details = document.createElement("div");
+    details.className = "job-requirement__details";
+
+    const category = document.createElement("span");
+    category.className = "job-requirement__category";
+    category.textContent = formatRequirementCategory(record.category);
+
+    const importance = document.createElement("span");
+    importance.className = "job-requirement__importance";
+    importance.textContent = record.importance === "mandatory"
+      ? "Mandatory"
+      : "Preferred";
+
+    details.append(category, importance);
+
+    const actions = document.createElement("div");
+    actions.className = "job-requirement__actions";
+
+    const editButton = document.createElement("button");
+    editButton.className = "job-action";
+    editButton.type = "button";
+    editButton.dataset.requirementAction = "edit";
+    editButton.textContent = "Edit";
+    editButton.setAttribute("aria-label", `Edit requirement: ${record.description}`);
+    editButton.addEventListener("click", () =>
+      openRequirementDialog({
+        invoker: editButton,
+        jobId,
+        record
+      })
+    );
+
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "job-action job-action--delete";
+    deleteButton.type = "button";
+    deleteButton.dataset.requirementAction = "delete";
+    deleteButton.textContent = "Delete";
+    deleteButton.setAttribute("aria-label", `Delete requirement: ${record.description}`);
+    deleteButton.addEventListener("click", () =>
+      openRequirementDeleteDialog(record, deleteButton)
+    );
+
+    actions.append(editButton, deleteButton);
+    article.append(description, details, actions);
+    jobRequirementsList.append(article);
+  });
+}
+
+function focusRequirementAction(requirementId, action = "edit") {
+  const card = [...jobRequirementsList.querySelectorAll("[data-requirement-id]")]
+    .find((item) => item.dataset.requirementId === requirementId);
+  const target = card?.querySelector(`[data-requirement-action="${action}"]`);
+
+  if (!target) {
+    requirementAddAction.focus();
+    return false;
+  }
+  target.focus();
+  return true;
+}
+
+function clearRequirementFieldErrors() {
+  requirementFields.forEach((field) => {
+    clearFieldError(requirementControls[field], requirementFieldErrors[field]);
+  });
+}
+
+function resetRequirementForm() {
+  requirementForm.reset();
+  requirementControls.category.value = "other";
+  requirementControls.importance.value = "";
+  editingRequirementId = null;
+  editingRequirementJobId = null;
+  requirementFormTitle.textContent = "Add Requirement";
+  requirementSubmit.textContent = "Add Requirement";
+  clearRequirementFieldErrors();
+}
+
+function populateRequirementForm(record, jobId) {
+  resetRequirementForm();
+  editingRequirementId = record?.id ?? null;
+  editingRequirementJobId = jobId;
+  requirementControls.description.value = record?.description ?? "";
+  requirementControls.category.value = record?.category ?? "other";
+  requirementControls.importance.value = record?.importance ?? "";
+  requirementFormTitle.textContent = record ? "Edit Requirement" : "Add Requirement";
+  requirementSubmit.textContent = record ? "Save changes" : "Add Requirement";
+}
+
+function getRequirementFormSnapshot() {
+  return JSON.stringify(
+    requirementFields.map((field) => requirementControls[field].value)
+  );
+}
+
+function openRequirementDialog({ invoker, jobId, record = null }) {
+  if (dialogManager.isOpen()) {
+    return;
+  }
+
+  const job = careerState.getJobs().find((item) => item.id === jobId);
+  if (!job) {
+    notifications.show("error", "The Job could not be found.");
+    return;
+  }
+
+  const existingRecord = record
+    ? careerState.getRequirements(jobId).find((item) => item.id === record.id)
+    : null;
+  if (record && !existingRecord) {
+    notifications.show("error", "The Requirement could not be found.");
+    renderJobRequirements(jobId);
+    return;
+  }
+
+  populateRequirementForm(existingRecord, jobId);
+  requirementFormSnapshot = getRequirementFormSnapshot();
+
+  openDialogWithNavigation(requirementDialog, {
+    invoker,
+    initialFocus: requirementControls.description,
+    isDirty: () => getRequirementFormSnapshot() !== requirementFormSnapshot,
+    onDiscard() {
+      const savedRecord = editingRequirementId === null
+        ? null
+        : careerState.getRequirements(jobId)
+          .find((item) => item.id === editingRequirementId) ?? null;
+
+      populateRequirementForm(savedRecord, jobId);
+      requirementFormSnapshot = getRequirementFormSnapshot();
+    }
+  });
+}
+
+function showRequirementValidationErrors(errors) {
+  const messagesByField = new Map();
+
+  errors.forEach(({ field, message }) => {
+    if (!Object.hasOwn(requirementControls, field)) {
+      return;
+    }
+    const messages = messagesByField.get(field) ?? [];
+    messages.push(message);
+    messagesByField.set(field, messages);
+  });
+
+  messagesByField.forEach((messages, field) => {
+    showFieldError(
+      requirementControls[field],
+      requirementFieldErrors[field],
+      [...new Set(messages)].join(" ")
+    );
+  });
+
+  const firstInvalidField = requirementFields.find((field) => messagesByField.has(field));
+  if (firstInvalidField) {
+    requirementControls[firstInvalidField].focus();
+  }
+}
+
+function readRequirementForm() {
+  return {
+    description: requirementControls.description.value,
+    category: requirementControls.category.value,
+    importance: requirementControls.importance.value
+  };
+}
+
+function saveRequirement(event) {
+  event.preventDefault();
+  clearRequirementFieldErrors();
+
+  const input = readRequirementForm();
+  const descriptionRequired = validateRequired(
+    input.description,
+    "a Requirement description"
+  );
+  const importanceRequired = validateRequired(input.importance, "an importance");
+  [
+    ["description", descriptionRequired],
+    ["importance", importanceRequired]
+  ].forEach(([field, result]) => {
+    if (!result.valid) {
+      showFieldError(
+        requirementControls[field],
+        requirementFieldErrors[field],
+        result.message
+      );
+    }
+  });
+
+  const firstInvalidField = [
+    ["description", descriptionRequired],
+    ["importance", importanceRequired]
+  ].find(([, result]) => !result.valid)?.[0];
+  if (firstInvalidField) {
+    notifications.show("error", "Enter a description and choose an importance.");
+    requirementControls[firstInvalidField].focus();
+    return;
+  }
+
+  const jobId = editingRequirementJobId;
+  const existingRecord = editingRequirementId === null
+    ? null
+    : careerState.getRequirements(jobId)
+      .find((record) => record.id === editingRequirementId) ?? null;
+  if (editingRequirementId !== null && !existingRecord) {
+    notifications.show("error", "The Requirement could not be found.");
+    return;
+  }
+
+  if (
+    existingRecord
+    && requirementFields.every((field) => input[field] === existingRecord[field])
+  ) {
+    dialogManager.closeAfterMutation();
+    resetRequirementForm();
+    return;
+  }
+
+  try {
+    const savedRecord = existingRecord
+      ? careerState.updateRequirement(existingRecord.id, {
+        ...input,
+        updatedAt: new Date().toISOString()
+      })
+      : careerState.createRequirement(createRequirementRecord({
+        ...input,
+        jobId
+      }, {
+        id: createRecordId(),
+        createdAt: new Date().toISOString()
+      }));
+
+    dialogManager.closeAfterMutation();
+    resetRequirementForm();
+    if (
+      !jobDetailPanel.hidden
+      && jobDetailPanel.dataset.jobId === jobId
+    ) {
+      renderJobRequirements(jobId);
+      focusRequirementAction(savedRecord.id);
+    }
+    notifications.show("success", existingRecord
+      ? "Requirement updated."
+      : "Requirement added.");
+  } catch (error) {
+    if (Array.isArray(error.errors)) {
+      showRequirementValidationErrors(error.errors);
+    }
+    notifications.show(
+      "error",
+      error.message || "The Requirement could not be saved."
+    );
+  }
+}
+
+function openRequirementDeleteDialog(record, invoker) {
+  if (dialogManager.isOpen()) {
+    return;
+  }
+
+  const jobId = jobDetailPanel.dataset.jobId;
+  const records = careerState.getRequirements(jobId);
+  const recordIndex = records.findIndex((item) => item.id === record.id);
+  if (recordIndex === -1) {
+    notifications.show("error", "The Requirement could not be found.");
+    renderJobRequirements(jobId);
+    return;
+  }
+
+  pendingRequirementDeletion = {
+    id: record.id,
+    jobId,
+    nextId: records[recordIndex + 1]?.id ?? null,
+    previousId: records[recordIndex - 1]?.id ?? null
+  };
+  requirementDeleteDescription.textContent =
+    `"${record.description}" will be deleted. Achievement mappings associated with this Requirement will also be deleted. Achievement records themselves will remain.`;
+
+  try {
+    openDialogWithNavigation(requirementDeleteDialog, {
+      invoker,
+      initialFocus: requirementDeleteCancel,
+      isDirty: () => false
+    });
+  } catch (error) {
+    pendingRequirementDeletion = null;
+    notifications.show(
+      "error",
+      error.message || "The Requirement deletion confirmation could not be opened."
+    );
+  }
+}
+
+function confirmRequirementDeletion() {
+  const pendingDeletion = pendingRequirementDeletion;
+  if (
+    !pendingDeletion
+    || !requirementDeleteDialog.open
+    || isDeletingRequirement
+  ) {
+    return;
+  }
+
+  isDeletingRequirement = true;
+  try {
+    careerState.deleteRequirement(pendingDeletion.id);
+  } catch (error) {
+    isDeletingRequirement = false;
+    notifications.show(
+      "error",
+      error.message || "The Requirement could not be deleted."
+    );
+    return;
+  }
+
+  pendingRequirementDeletion = null;
+  isDeletingRequirement = false;
+  dialogManager.closeAfterMutation();
+  if (
+    !jobDetailPanel.hidden
+    && jobDetailPanel.dataset.jobId === pendingDeletion.jobId
+  ) {
+    renderJobRequirements(pendingDeletion.jobId);
+    if (!focusRequirementAction(pendingDeletion.nextId)) {
+      focusRequirementAction(pendingDeletion.previousId);
+    }
+  }
+  notifications.show("success", "Requirement deleted.");
+}
+
 function renderJobDetail(record) {
   jobDetailPanel.dataset.jobId = record.id;
   jobDetailTitle.textContent = record.roleTitle;
@@ -687,6 +1067,7 @@ function renderJobDetail(record) {
   jobArchiveAction.textContent = record.status === "archived"
     ? "Reactivate"
     : "Archive";
+  renderJobRequirements(record.id);
 }
 
 function openJobDetail(jobId) {
@@ -1963,6 +2344,42 @@ jobDeleteCancel.addEventListener("click", () => {
   pendingJobDeletionId = null;
 });
 jobDeleteConfirm.addEventListener("click", confirmJobDeletion);
+requirementAddAction.addEventListener("click", () => {
+  openRequirementDialog({
+    invoker: requirementAddAction,
+    jobId: jobDetailPanel.dataset.jobId
+  });
+});
+requirementForm.addEventListener("submit", saveRequirement);
+requirementForm.addEventListener("input", (event) => {
+  const field = requirementFields.find(
+    (item) => requirementControls[item] === event.target
+  );
+  if (field) {
+    clearFieldError(requirementControls[field], requirementFieldErrors[field]);
+  }
+});
+requirementForm.addEventListener("change", (event) => {
+  const field = requirementFields.find(
+    (item) => requirementControls[item] === event.target
+  );
+  if (field) {
+    clearFieldError(requirementControls[field], requirementFieldErrors[field]);
+  }
+});
+requirementCancel.addEventListener("click", () => {
+  dialogManager.requestClose();
+});
+requirementDeleteDialog.addEventListener("cancel", () => {
+  if (!isDeletingRequirement) {
+    pendingRequirementDeletion = null;
+  }
+});
+requirementDeleteCancel.addEventListener("click", () => {
+  dialogManager.requestClose();
+  pendingRequirementDeletion = null;
+});
+requirementDeleteConfirm.addEventListener("click", confirmRequirementDeletion);
 jobEditAction.addEventListener("click", () => {
   const record = careerState.getJobs()
     .find((item) => item.id === jobDetailPanel.dataset.jobId);

@@ -869,11 +869,25 @@
             </dl>
 
             <section class="job-requirements" aria-labelledby="job-requirements-title">
-              <h3 id="job-requirements-title">Requirements</h3>
-              <p>
-                Requirement management will be available in a future update.
-                Requirements you add to this Job will appear here.
+              <div class="job-requirements__heading">
+                <h3 id="job-requirements-title">Requirements</h3>
+                <button
+                  class="job-action"
+                  id="requirement-add-action"
+                  type="button"
+                >
+                  Add Requirement
+                </button>
+              </div>
+              <p class="job-requirements__empty" id="job-requirements-empty">
+                No Requirements added to this Job yet.
               </p>
+              <div
+                class="job-requirements__list"
+                id="job-requirements-list"
+                role="list"
+                aria-label="Requirements"
+              ></div>
             </section>
           </section>
         </section>
@@ -982,6 +996,102 @@
               <button class="achievement-cancel" id="job-cancel" type="button">Cancel</button>
             </div>
           </form>
+        </dialog>
+
+        <dialog
+          class="requirement-dialog"
+          id="requirement-dialog"
+          aria-labelledby="requirement-dialog-title"
+          aria-describedby="requirement-dialog-description"
+        >
+          <h2 id="requirement-dialog-title">Add or edit a Requirement</h2>
+          <p id="requirement-dialog-description">
+            Capture a Requirement for this Job and indicate its importance.
+          </p>
+          <form class="job-form" id="requirement-form" novalidate>
+            <h3 class="job-form-title" id="requirement-form-title">Add Requirement</h3>
+
+            <div class="job-form-fields">
+              <div class="profile-field">
+                <label for="requirement-description">
+                  Description <span aria-hidden="true">*</span>
+                </label>
+                <textarea
+                  id="requirement-description"
+                  name="description"
+                  rows="5"
+                  aria-describedby="requirement-description-error"
+                  required
+                ></textarea>
+                <p class="profile-field-error" id="requirement-description-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="requirement-category">Category</label>
+                <select
+                  id="requirement-category"
+                  name="category"
+                  aria-describedby="requirement-category-error"
+                >
+                  <option value="skill">Skill</option>
+                  <option value="experience">Experience</option>
+                  <option value="education">Education</option>
+                  <option value="certification">Certification</option>
+                  <option value="responsibility">Responsibility</option>
+                  <option value="other" selected>Other</option>
+                </select>
+                <p class="profile-field-error" id="requirement-category-error" hidden></p>
+              </div>
+
+              <div class="profile-field">
+                <label for="requirement-importance">
+                  Importance <span aria-hidden="true">*</span>
+                </label>
+                <select
+                  id="requirement-importance"
+                  name="importance"
+                  aria-describedby="requirement-importance-error"
+                  required
+                >
+                  <option value="" selected disabled>Select an importance</option>
+                  <option value="mandatory">Mandatory</option>
+                  <option value="preferred">Preferred</option>
+                </select>
+                <p class="profile-field-error" id="requirement-importance-error" hidden></p>
+              </div>
+            </div>
+
+            <div class="profile-form-actions">
+              <button class="profile-submit" id="requirement-submit" type="submit">
+                Add Requirement
+              </button>
+              <button class="achievement-cancel" id="requirement-cancel" type="button">
+                Cancel
+              </button>
+            </div>
+          </form>
+        </dialog>
+
+        <dialog
+          class="requirement-delete-dialog"
+          id="requirement-delete-dialog"
+          aria-labelledby="requirement-delete-dialog-title"
+          aria-describedby="requirement-delete-description"
+        >
+          <h2 id="requirement-delete-dialog-title">Delete this Requirement?</h2>
+          <p id="requirement-delete-description"></p>
+          <div class="job-delete-dialog-actions">
+            <button class="job-action" id="requirement-delete-cancel" type="button">
+              Cancel
+            </button>
+            <button
+              class="job-action job-action--delete"
+              id="requirement-delete-confirm"
+              type="button"
+            >
+              Delete Requirement
+            </button>
+          </div>
         </dialog>
 
         <section

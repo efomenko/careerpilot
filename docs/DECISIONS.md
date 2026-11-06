@@ -108,6 +108,12 @@ Evidence values that cannot be represented faithfully by JSON are rejected at th
 - Browser storage is not a secure cloud backup, and data may be lost if browser data is cleared.
 - Import/export and schema migration remain separate scope.
 
+**CP-021 follow-up — 2026-11-06:** The current storage envelope is schema
+version 3. The storage layer supports v1 → v2 → v3 and v2 → v3 migrations.
+Loading and migration do not write to storage; a later successful mutation
+saves the complete v3 snapshot. Migration validation and failure safety are
+documented in `TECHNICAL_DESIGN.md`.
+
 ### DEC-007 — Define the final domain schemas
 
 **Status:** Proposed
@@ -125,6 +131,15 @@ it does not finalize Requirement, draft, or application schemas. Requirements
 and achievement-mapping collections support state and persistence
 relationships, but their user-facing management workflows are outside CP-020.
 
+**CP-021 follow-up — 2026-11-06:** CP-021 finalizes the Requirement record
+contract and Job-detail management workflow. A Requirement has `id`, `jobId`,
+`description`, `category`, `importance`, `createdAt`, and `updatedAt`, and is
+managed through state CRUD with Job ownership validation. The Job detail view
+supports creating, editing, and deleting Requirements, including for archived
+Jobs. Requirement deletion also removes its achievement mappings while
+preserving Achievement records. The finalized contract and behavior are
+documented in `TECHNICAL_DESIGN.md`; drafts and applications remain proposals.
+
 ### DEC-013 — Define Career Profile and Employment History schemas
 
 **Status:** Confirmed
@@ -141,8 +156,9 @@ relationships, but their user-facing management workflows are outside CP-020.
 - Verification and approval fields are not part of these CP-010 schemas. Their behavior remains governed by later verification and approval work, including the existing distinction in DEC-009.
 - At the time of DEC-013, schemas for jobs, requirements, drafts, and
   applications remained proposals. CP-020 has since established the Job
-  record schema; Requirements, drafts, and applications remain proposals.
-  The achievement schema is confirmed by DEC-014.
+  record schema, and CP-021 has since finalized the Requirement contract.
+  Draft and application schemas remain proposals. The achievement schema is
+  confirmed by DEC-014.
 
 ### DEC-014 — Define the CP-012 Achievement Record Contract
 

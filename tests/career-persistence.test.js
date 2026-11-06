@@ -61,6 +61,7 @@ function snapshot(overrides = {}) {
     })],
     jobs: [],
     requirements: [],
+    legacyRequirements: [],
     achievementMappings: [],
     ...overrides
   };
@@ -87,11 +88,18 @@ const snapshotKeys = [
   "achievementRecords",
   "jobs",
   "requirements",
+  "legacyRequirements",
   "achievementMappings"
 ];
 
 function v1Snapshot() {
-  const { jobs, requirements, achievementMappings, ...v1 } = snapshot();
+  const {
+    jobs,
+    requirements,
+    legacyRequirements,
+    achievementMappings,
+    ...v1
+  } = snapshot();
   return v1;
 }
 
@@ -130,7 +138,11 @@ function createFakeStorage(initialValue = null) {
   };
 }
 
-function stored(value = snapshot(), version = 2) {
+function stored(value = snapshot(), version = 3) {
+  if (version === 2) {
+    const { legacyRequirements, ...v2Snapshot } = value;
+    return JSON.stringify({ version, ...v2Snapshot });
+  }
   return JSON.stringify({ version, ...value });
 }
 
@@ -166,7 +178,7 @@ test("valid data is restored before the function returns", () => {
 test("corrupt and unsupported data produce persistent warnings and are not overwritten", () => {
   for (const [raw, kind] of [
     ["not valid JSON", "corrupt"],
-    [stored(snapshot(), 3), "unsupported-version"]
+    [stored(snapshot(), 4), "unsupported-version"]
   ]) {
     const fake = createFakeStorage(raw);
     const persistence = createCareerPersistence(fake);
@@ -315,7 +327,7 @@ test("successful mutations save the complete post-mutation snapshot", () => {
 
   const saved = JSON.parse(fake.values.get(storageKey));
   assert.equal(result.id, "profile-saved");
-  assert.equal(saved.version, 2);
+  assert.equal(saved.version, 3);
   assert.deepEqual(Object.keys(saved), ["version", ...snapshotKeys]);
   assert.deepEqual(saved.profile, persistence.state.getProfile());
   assert.deepEqual(saved.employmentRecords, []);
@@ -325,10 +337,19 @@ test("successful mutations save the complete post-mutation snapshot", () => {
   assert.deepEqual(saved.achievementMappings, []);
 });
 
-test("restores a complete six-property v2 snapshot without writing", () => {
+test("restores a complete v3 snapshot without writing", () => {
   const data = snapshot({
     jobs: [job("job-1"), job("job-2", { status: "archived" })],
-    requirements: [{ id: "requirement-1", jobId: "job-1", text: "Requirement" }],
+    requirements: [{
+      id: "requirement-1",
+      jobId: "job-1",
+      description: "Requirement",
+      category: "other",
+      importance: "preferred",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    }],
+    legacyRequirements: [null, { id: "legacy" }],
     achievementMappings: [{
       id: "mapping-1",
       requirementId: "requirement-1",
@@ -356,7 +377,7 @@ test("restores profile null and empty new collections", () => {
   assert.deepEqual(persistence.state.getJobs(), []);
 });
 
-test("valid v1 data is restored as migrated v2 without warning or write", () => {
+test("valid v1 data is restored as migrated v3 without warning or write", () => {
   const raw = stored(v1Snapshot(), 1);
   const fake = createFakeStorage(raw);
   const persistence = createCareerPersistence(fake);
@@ -370,7 +391,7 @@ test("valid v1 data is restored as migrated v2 without warning or write", () => 
   assert.equal(fake.values.get(storageKey), raw);
 });
 
-test("v1 data stays intact until a successful mutation saves complete v2", () => {
+test("v1 data stays intact until a successful mutation saves complete v3", () => {
   const raw = stored(v1Snapshot(), 1);
   const fake = createFakeStorage(raw);
   const persistence = createCareerPersistence(fake);
@@ -385,7 +406,7 @@ test("v1 data stays intact until a successful mutation saves complete v2", () =>
   fake.setError = null;
   persistence.state.createJob(job("job-2"));
   const saved = JSON.parse(fake.values.get(storageKey));
-  assert.equal(saved.version, 2);
+  assert.equal(saved.version, 3);
   assert.deepEqual(Object.keys(saved), ["version", ...snapshotKeys]);
   assert.deepEqual(saved.jobs.map((record) => record.id), ["job-1", "job-2"]);
   assert.deepEqual(saved.employmentRecords, snapshot().employmentRecords);
@@ -427,7 +448,15 @@ test("no-op job updates do not write", () => {
 test("saves keep jobs, requirements, and mappings from restored state", () => {
   const data = snapshot({
     jobs: [job("job-1")],
-    requirements: [{ id: "requirement-1", jobId: "job-1" }],
+    requirements: [{
+      id: "requirement-1",
+      jobId: "job-1",
+      description: "Requirement",
+      category: "other",
+      importance: "preferred",
+      createdAt: timestamp,
+      updatedAt: timestamp
+    }],
     achievementMappings: [{ id: "mapping-1", requirementId: "requirement-1" }]
   });
   const fake = createFakeStorage(stored(data));
@@ -447,8 +476,47 @@ test("saves keep jobs, requirements, and mappings from restored state", () => {
   assert.equal("fitAssessments" in saved, false);
 });
 
-test("current v2 envelopes load without a warning", () => {
-  const fake = createFakeStorage(stored(snapshot(), 2));
+test("v2 migration preserves legacy entries through restore and later v3 persistence", () => {
+  const legacyRequirements = [
+    { id: "incomplete", jobId: "job-1" },
+    null,
+    "legacy value"
+  ];
+  const data = {
+    ...snapshot({
+      jobs: [job("job-1")],
+      requirements: legacyRequirements,
+      achievementMappings: [
+        { id: "orphan-map", requirementId: "orphan", extra: true },
+        { id: "legacy-map", requirementId: "incomplete" }
+      ]
+    })
+  };
+  delete data.legacyRequirements;
+  const raw = stored(data, 2);
+  const fake = createFakeStorage(raw);
+  const persistence = createCareerPersistence(fake);
+
+  assert.deepEqual(persistence.state.getSnapshot().legacyRequirements, legacyRequirements);
+  assert.deepEqual(persistence.state.getRequirements("job-1"), []);
+  assert.deepEqual(fake.calls.setItem, []);
+  assert.equal(fake.values.get(storageKey), raw);
+
+  persistence.state.updateJob("job-1", {
+    notes: "Unrelated mutation",
+    updatedAt: "2025-04-21T10:00:00.000Z"
+  });
+  const saved = JSON.parse(fake.values.get(storageKey));
+  assert.equal(saved.version, 3);
+  assert.deepEqual(saved.legacyRequirements, legacyRequirements);
+  assert.deepEqual(saved.achievementMappings, data.achievementMappings);
+  assert.deepEqual(saved.achievementRecords, data.achievementRecords);
+  assert.deepEqual(saved.profile, data.profile);
+  assert.deepEqual(saved.employmentRecords, data.employmentRecords);
+});
+
+test("current v3 envelopes load without a warning", () => {
+  const fake = createFakeStorage(stored(snapshot()));
   const persistence = createCareerPersistence(fake);
 
   assert.equal(persistence.getStatus().persistentWarning, null);
@@ -457,7 +525,7 @@ test("current v2 envelopes load without a warning", () => {
 test("corrupt v2 data and unsupported future versions are never overwritten by job mutations", () => {
   for (const [raw, kind] of [
     [stored({ ...snapshot(), jobs: "bad" }, 2), "corrupt"],
-    [stored(snapshot(), 3), "unsupported-version"]
+    [stored(snapshot(), 4), "unsupported-version"]
   ]) {
     const fake = createFakeStorage(raw);
     const persistence = createCareerPersistence(fake);
@@ -535,7 +603,7 @@ test("successful saves never clear corrupt or unsupported warnings", () => {
   for (const [raw, kind] of [
     ["bad JSON", "corrupt"],
     [stored(snapshot(), 99), "unsupported-version"],
-    [stored(snapshot(), 3), "unsupported-version"]
+    [stored(snapshot(), 4), "unsupported-version"]
   ]) {
     const fake = createFakeStorage(raw);
     const persistence = createCareerPersistence(fake);

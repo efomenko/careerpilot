@@ -9,6 +9,7 @@ import {
   validateAchievementRecord
 } from "./achievement-model.js";
 import { validateJobRecord } from "./job-model.js";
+import { validateRequirementRecord } from "./requirement-model.js";
 
 function copyProfile(profile) {
   return profile ? { ...profile, skills: [...profile.skills] } : null;
@@ -208,6 +209,7 @@ function prepareSnapshotCopy(snapshot) {
     "achievementRecords",
     "jobs",
     "requirements",
+    "legacyRequirements",
     "achievementMappings"
   ];
   const requiredFields = ["profile", "employmentRecords", "achievementRecords"];
@@ -399,6 +401,14 @@ function validateSnapshotRecords(snapshot) {
     });
   }
 
+  if (!Array.isArray(snapshot.legacyRequirements)) {
+    errors.push({
+      field: "legacyRequirements",
+      message: "Legacy Requirements must be an array.",
+      recordType: "legacy requirement"
+    });
+  }
+
   if (errors.length > 0) {
     const error = new TypeError("Career snapshot is invalid.");
     error.errors = errors;
@@ -561,10 +571,15 @@ function assertEditableInput(input, reservedFields, recordName) {
  * - updateJob(id, updates): partially update a Job with caller-supplied updatedAt.
  * - archiveJob(id, updatedAt) / reactivateJob(id, updatedAt): change Job status.
  * - deleteJob(id): remove a Job and its requirements and achievement mappings.
+ * - createRequirement(record): add a complete Requirement for an existing Job.
+ * - updateRequirement(id, updates): partially update a Requirement while
+ *   preserving its ID, Job, and creation timestamp.
+ * - deleteRequirement(id): remove a Requirement and its achievement mappings.
  * - getProfile(): return a safe profile copy, or null when absent.
  * - getEmploymentRecords(): return a new array containing safe record copies.
  * - getAchievementRecords(): return a new array containing safe record copies.
  * - getJobs(): return a new array containing safe Job copies.
+ * - getRequirements(jobId): return safe Requirement copies in insertion order.
  *
  * Invalid records throw TypeError; unknown IDs and duplicate IDs throw Error.
  * No browser APIs, persistence, clock, or ID generation are used.
@@ -582,6 +597,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
   let achievementRecords = [];
   let jobs = [];
   let requirements = [];
+  let legacyRequirements = [];
   let achievementMappings = [];
   let isFresh = true;
 
@@ -645,6 +661,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       achievementRecords = replacement.achievementRecords;
       jobs = replacement.jobs.map(copyJobRecord);
       requirements = replacement.requirements;
+      legacyRequirements = replacement.legacyRequirements;
       achievementMappings = replacement.achievementMappings;
       isFresh = false;
     },
@@ -656,6 +673,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
         achievementRecords,
         jobs,
         requirements,
+        legacyRequirements,
         achievementMappings
       });
     },
@@ -975,6 +993,125 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       };
     },
 
+    createRequirement(record) {
+      const result = validateRequirementRecord(record);
+      if (!result.valid) {
+        throwJobValidationError("Requirement record", result.errors);
+      }
+      if (!jobs.some((job) => job.id === record.jobId)) {
+        throw createJobStateError(
+          "NOT_FOUND",
+          `Job "${record.jobId}" does not exist.`
+        );
+      }
+      if (requirements.some((requirement) => requirement.id === record.id)) {
+        throw createJobStateError(
+          "DUPLICATE_ID",
+          `A Requirement with ID "${record.id}" already exists.`
+        );
+      }
+
+      const newRequirement = { ...record };
+      requirements.push(newRequirement);
+      const createdRequirement = { ...newRequirement };
+      notifyMutation();
+      return createdRequirement;
+    },
+
+    updateRequirement(id, updates) {
+      const requirementIndex = requirements.findIndex(
+        (requirement) => requirement.id === id
+      );
+      if (requirementIndex === -1) {
+        throw createJobStateError(
+          "NOT_FOUND",
+          `Requirement "${id}" does not exist.`
+        );
+      }
+      if (
+        updates === null
+        || typeof updates !== "object"
+        || Array.isArray(updates)
+      ) {
+        throw createJobStateError(
+          "VALIDATION_ERROR",
+          "Requirement updates require an object of Requirement fields."
+        );
+      }
+
+      for (const field of ["id", "jobId", "createdAt"]) {
+        if (Object.hasOwn(updates, field)) {
+          throw createJobStateError(
+            "IMMUTABLE_FIELD",
+            `Requirement updates cannot change ${field}.`
+          );
+        }
+      }
+
+      const allowedFields = new Set(["description", "category", "importance", "updatedAt"]);
+      const unknownField = Object.keys(updates)
+        .find((field) => !allowedFields.has(field));
+      if (unknownField) {
+        throw createJobStateError(
+          "VALIDATION_ERROR",
+          `Requirement updates contain unknown field "${unknownField}".`
+        );
+      }
+
+      const existingRequirement = requirements[requirementIndex];
+      const updatedFields = Object.keys(updates)
+        .filter((field) => field !== "updatedAt");
+      const hasChanges = updatedFields.some((field) =>
+        !Object.is(existingRequirement[field], updates[field])
+      );
+      if (!hasChanges) {
+        return { ...existingRequirement };
+      }
+      if (!Object.hasOwn(updates, "updatedAt")) {
+        throw createJobStateError(
+          "VALIDATION_ERROR",
+          "A changed Requirement requires a caller-supplied updatedAt timestamp."
+        );
+      }
+
+      const updatedRequirement = {
+        ...existingRequirement,
+        ...updates
+      };
+      const result = validateRequirementRecord(updatedRequirement);
+      if (!result.valid) {
+        throwJobValidationError("Requirement record", result.errors);
+      }
+
+      requirements[requirementIndex] = { ...updatedRequirement };
+      const updatedCopy = { ...requirements[requirementIndex] };
+      notifyMutation();
+      return updatedCopy;
+    },
+
+    deleteRequirement(id) {
+      const requirementIndex = requirements.findIndex(
+        (requirement) => requirement.id === id
+      );
+      if (requirementIndex === -1) {
+        throw createJobStateError(
+          "NOT_FOUND",
+          `Requirement "${id}" does not exist.`
+        );
+      }
+
+      const remainingRequirements = requirements.filter(
+        (requirement) => requirement.id !== id
+      );
+      const remainingMappings = achievementMappings.filter(
+        (mapping) => mapping.requirementId !== id
+      );
+
+      requirements = remainingRequirements;
+      achievementMappings = remainingMappings;
+      notifyMutation();
+    },
+
     getProfile() {
       return copyProfile(profile);
     },
@@ -989,6 +1126,12 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
 
     getJobs() {
       return jobs.map(copyJobRecord);
+    },
+
+    getRequirements(jobId) {
+      return requirements
+        .filter((requirement) => requirement.jobId === jobId)
+        .map((requirement) => ({ ...requirement }));
     }
   };
 

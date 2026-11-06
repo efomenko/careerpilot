@@ -1068,7 +1068,8 @@ a:focus-visible {
 }
 
 .profile-field input,
-.profile-field textarea {
+.profile-field textarea,
+.profile-field select {
   display: block;
   width: 100%;
   min-height: 44px;
@@ -1095,13 +1096,15 @@ a:focus-visible {
 
 .profile-field input:focus-visible,
 .profile-field textarea:focus-visible,
+.profile-field select:focus-visible,
 .profile-submit:focus-visible {
   outline: 3px solid #5140bd;
   outline-offset: 3px;
 }
 
 .profile-field input[aria-invalid="true"],
-.profile-field textarea[aria-invalid="true"] {
+.profile-field textarea[aria-invalid="true"],
+.profile-field select[aria-invalid="true"] {
   border-color: #a12622;
 }
 
@@ -1523,7 +1526,9 @@ a:focus-visible {
 }
 
 .job-dialog,
-.job-delete-dialog {
+.job-delete-dialog,
+.requirement-dialog,
+.requirement-delete-dialog {
   width: min(680px, calc(100vw - 32px));
   max-width: 100%;
   max-height: calc(100vh - 32px);
@@ -1539,13 +1544,17 @@ a:focus-visible {
 }
 
 .job-dialog::backdrop,
-.job-delete-dialog::backdrop {
+.job-delete-dialog::backdrop,
+.requirement-dialog::backdrop,
+.requirement-delete-dialog::backdrop {
   background: rgb(37 36 58 / 56%);
   backdrop-filter: blur(2px);
 }
 
 .job-dialog > h2,
-.job-delete-dialog > h2 {
+.job-delete-dialog > h2,
+.requirement-dialog > h2,
+.requirement-delete-dialog > h2 {
   margin: 0;
   font-size: clamp(21px, 3vw, 26px);
   line-height: 1.25;
@@ -1553,7 +1562,9 @@ a:focus-visible {
 }
 
 .job-dialog > p,
-.job-delete-dialog > p {
+.job-delete-dialog > p,
+.requirement-dialog > p,
+.requirement-delete-dialog > p {
   margin: 10px 0 0;
   color: var(--color-muted);
   font-size: 14px;
@@ -1604,6 +1615,14 @@ a:focus-visible {
 .job-form-fields .profile-field:nth-child(3),
 .job-form-fields .profile-field:nth-child(5) {
   grid-column: 1 / -1;
+}
+
+.requirement-dialog .job-form-fields .profile-field:first-child {
+  grid-column: 1 / -1;
+}
+
+.requirement-dialog .job-form-fields .profile-field:nth-child(3) {
+  grid-column: auto;
 }
 
 .job-heading {
@@ -2059,16 +2078,95 @@ a:focus-visible {
   border-radius: 10px;
 }
 
-.job-requirements p {
-  margin: 8px 0 0;
+.job-requirements__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.job-requirements__empty {
+  margin: 12px 0 0;
   color: var(--color-muted);
   font-size: 13px;
   line-height: 1.6;
 }
 
+.job-requirements__list {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 14px;
+}
+
+.job-requirements__list:empty {
+  display: none;
+}
+
+.job-requirement {
+  min-width: 0;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+}
+
+.job-requirement__description {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.job-requirement__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.job-requirement__category,
+.job-requirement__importance {
+  max-width: 100%;
+  padding: 3px 9px;
+  color: var(--color-primary-dark);
+  background: #f5f3ff;
+  border: 1px solid #d7d1f4;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.job-requirement__importance {
+  color: #4b4b60;
+  background: #f1f1f5;
+  border-color: #cfcfdb;
+}
+
+.job-requirement__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.job-requirement__actions button:focus-visible,
+.job-requirements__heading button:focus-visible {
+  outline: 3px solid #5140bd;
+  outline-offset: 3px;
+}
+
 @media (max-width: 520px) {
   .job-dialog,
-  .job-delete-dialog {
+  .job-delete-dialog,
+  .requirement-dialog,
+  .requirement-delete-dialog {
     width: calc(100vw - 24px);
     max-height: calc(100vh - 24px);
     max-height: calc(100dvh - 24px);
@@ -2085,11 +2183,17 @@ a:focus-visible {
     grid-column: auto;
   }
 
-  .job-dialog .profile-form-actions {
+  .requirement-dialog .job-form-fields .profile-field:first-child {
+    grid-column: auto;
+  }
+
+  .job-dialog .profile-form-actions,
+  .requirement-dialog .profile-form-actions {
     flex-direction: column-reverse;
   }
 
-  .job-dialog .profile-form-actions button {
+  .job-dialog .profile-form-actions button,
+  .requirement-dialog .profile-form-actions button {
     width: 100%;
   }
 
@@ -2098,6 +2202,24 @@ a:focus-visible {
   }
 
   .job-delete-dialog-actions button {
+    width: 100%;
+  }
+
+  .job-requirements__heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .job-requirements__heading button,
+  .job-requirement__actions {
+    width: 100%;
+  }
+
+  .job-requirement__actions {
+    flex-direction: column;
+  }
+
+  .job-requirement__actions button {
     width: 100%;
   }
 

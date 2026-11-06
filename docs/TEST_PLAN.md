@@ -253,9 +253,9 @@ For M6, compare generated output against known evidence and documented expected 
   Requirements and their achievement mappings while preserving Achievement
   and Employment History records.
 - `tests/career-persistence.test.js` and `tests/career-storage.test.js`: verify
-  Job mutations persist, v1 snapshots load as v2 state with empty Jobs,
-  Requirements, and achievement-mapping collections, and the complete v2
-  envelope is written after a successful mutation.
+  Job mutations persist, v1 snapshots migrate through v2 to v3 with empty
+  Jobs, Requirements, and achievement-mapping collections, v2 snapshots
+  migrate to v3, and a successful mutation writes the complete v3 envelope.
 - Run `npm test` to execute the automated suite.
 
 #### Manual browser regression — pending
@@ -288,10 +288,44 @@ passed until run and reported.
 
 ### CP-021 — Requirements
 
-- Add mandatory and preferred requirements.
-- Edit and delete a requirement.
-- Confirm each requirement belongs to the correct job.
-- Test empty and ambiguous requirement text.
+#### Automated coverage
+
+- `tests/requirement-model.test.js`: verify the exact Requirement fields,
+  supported categories and importance values, default category, required
+  non-blank description, timestamps, rejection of unknown fields, and
+  non-mutation of inputs.
+- `tests/career-state.test.js`: verify Requirement CRUD, Job ownership,
+  immutable fields, no-op update behavior, insertion order, detached copies,
+  archived-Job management, and deletion of related mappings while preserving
+  Achievement records. Also verify `legacyRequirements` survives restore,
+  snapshots, and unrelated mutations without appearing in canonical CRUD
+  results.
+- `tests/career-storage.test.js`: verify v1 → v2 → v3 and v2 → v3 migration,
+  v3 loading and round trips, Requirement classification and duplicate-ID
+  handling, legacy and mapping preservation, read-only loads, and safe
+  failures for malformed Requirements and invalid envelopes.
+- `tests/career-persistence.test.js`: verify v1/v2 migration restores without
+  writing, later successful mutations persist the complete v3 snapshot,
+  legacy entries survive persistence, and failed loads do not overwrite
+  stored data or enable writes.
+- No dedicated automated UI test was added.
+
+#### Manual browser regression — completed
+
+- Create Requirements and verify required-field validation.
+- Verify user-provided descriptions render as text, not markup.
+- Edit Requirements; confirm unchanged submissions preserve timestamps and
+  do not cause unnecessary updates.
+- Verify dirty Escape shows the discard confirmation, Continue editing
+  retains values, and discard closes without saving.
+- Verify delete cancellation leaves the Requirement unchanged and confirmed
+  deletion removes it.
+- Verify focus restoration after cancel, discard, save, and delete.
+- Verify archived Jobs still allow Requirement creation, editing, and
+  deletion.
+- Verify navigation, keyboard interaction, and responsive layout.
+- Semantic interpretation or ambiguity of Requirement descriptions is not
+  validated.
 
 ### CP-022 — Evidence mapping
 
@@ -567,6 +601,19 @@ Do not mark a test as passed without executing it.
 - `git diff --check` passed.
 - The working tree was clean at final regression time. The final regression's
   commit identifier was not recorded in the supplied results.
+
+### CP-021 — Requirement model, persistence, and UI verification
+
+- Date: Not recorded in the supplied verification results.
+- Task: CP-021.
+- Automated regression: `npm test` — 279 passed, 0 failed.
+- `node --check src/js/app.js` passed.
+- `git diff --check` passed.
+- Manual browser regression passed for Requirement creation and validation,
+  safe text rendering, editing and no-op timestamp stability, dirty Escape and
+  Continue editing, discard, delete cancel/confirm, focus restoration,
+  archived Jobs, navigation, keyboard use, and responsive layout.
+- No dedicated automated UI test was added.
 
 #### Assistive-technology limitation
 

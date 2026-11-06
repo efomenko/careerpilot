@@ -4,14 +4,20 @@ import {
 } from "./career-model.js";
 import { validateAchievementRecord } from "./achievement-model.js";
 import { validateJobRecord } from "./job-model.js";
+import { validateRequirementRecord } from "./requirement-model.js";
 
 const STORAGE_KEY = "careerpilot.state";
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const v1SnapshotFields = ["profile", "employmentRecords", "achievementRecords"];
-const snapshotFields = [
+const v2SnapshotFields = [
   ...v1SnapshotFields,
   "jobs",
   "requirements",
+  "achievementMappings"
+];
+const snapshotFields = [
+  ...v2SnapshotFields.slice(0, -1),
+  "legacyRequirements",
   "achievementMappings"
 ];
 
@@ -22,6 +28,7 @@ function emptySnapshot() {
     achievementRecords: [],
     jobs: [],
     requirements: [],
+    legacyRequirements: [],
     achievementMappings: []
   };
 }
@@ -482,9 +489,172 @@ function validatePlainObjectArray(records, field, recordType, errors) {
   }
 }
 
+function validateJsonValue(value, path, active, errors) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      addError(errors, {
+        recordType: "legacyRequirement",
+        field: path,
+        path,
+        message: "Numbers must be finite."
+      });
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    addError(errors, {
+      recordType: "legacyRequirement",
+      field: path,
+      path,
+      message: `${typeof value} values cannot be represented faithfully by JSON.`
+    });
+    return;
+  }
+  if (active.has(value)) {
+    addError(errors, {
+      recordType: "legacyRequirement",
+      field: path,
+      path,
+      message: "Cyclic references are not supported."
+    });
+    return;
+  }
+
+  active.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        addError(errors, {
+          recordType: "legacyRequirement",
+          field: path,
+          path,
+          message: "Arrays must use the standard Array.prototype."
+        });
+        return;
+      }
+
+      const keys = Reflect.ownKeys(value);
+      if (keys.length !== value.length + 1 || !keys.includes("length")) {
+        addError(errors, {
+          recordType: "legacyRequirement",
+          field: path,
+          path,
+          message: "Arrays must be dense and cannot contain additional properties."
+        });
+        return;
+      }
+      for (let index = 0; index < value.length; index += 1) {
+        const elementPath = `${path}[${index}]`;
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor?.enumerable || !("value" in descriptor)) {
+          addError(errors, {
+            recordType: "legacyRequirement",
+            field: elementPath,
+            path: elementPath,
+            message: "Array elements must be enumerable data properties."
+          });
+          continue;
+        }
+        validateJsonValue(descriptor.value, elementPath, active, errors);
+      }
+      return;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      addError(errors, {
+        recordType: "legacyRequirement",
+        field: path,
+        path,
+        message: "Only plain objects are supported."
+      });
+      return;
+    }
+    for (const key of Reflect.ownKeys(value)) {
+      const propertyPath = `${path}.${String(key)}`;
+      if (typeof key !== "string") {
+        addError(errors, {
+          recordType: "legacyRequirement",
+          field: propertyPath,
+          path: propertyPath,
+          message: "Symbol-keyed object properties are not supported."
+        });
+        continue;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)) {
+        addError(errors, {
+          recordType: "legacyRequirement",
+          field: propertyPath,
+          path: propertyPath,
+          message: "Object properties must be enumerable data properties."
+        });
+        continue;
+      }
+      validateJsonValue(descriptor.value, propertyPath, active, errors);
+    }
+  } catch {
+    addError(errors, {
+      recordType: "legacyRequirement",
+      field: path,
+      path,
+      message: "Value properties could not be inspected safely."
+    });
+  } finally {
+    active.delete(value);
+  }
+}
+
+function validateRequirementArrayShape(records, field, errors) {
+  if (!Array.isArray(records)) {
+    addError(errors, { field, path: field, message: "Must be an array." });
+    return;
+  }
+  validateJsonValue(records, field, new WeakSet(), errors);
+}
+
+function migrateV2Requirements(snapshot) {
+  const idCounts = new Map();
+  for (const record of snapshot.requirements) {
+    if (isPlainObject(record) && typeof record.id === "string") {
+      idCounts.set(record.id, (idCounts.get(record.id) ?? 0) + 1);
+    }
+  }
+
+  const jobIds = new Set(snapshot.jobs.map((job) => job.id));
+  const requirements = [];
+  const legacyRequirements = [];
+  for (const record of snapshot.requirements) {
+    if (!isPlainObject(record)) {
+      legacyRequirements.push(record);
+      continue;
+    }
+
+    const result = validateRequirementRecord(record);
+    if (
+      result.valid
+      && idCounts.get(record.id) === 1
+      && jobIds.has(record.jobId)
+    ) {
+      requirements.push(record);
+    } else {
+      legacyRequirements.push(record);
+    }
+  }
+
+  return { requirements, legacyRequirements };
+}
+
 function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
   const errors = [];
-  const fields = version === 1 ? v1SnapshotFields : snapshotFields;
+  const fields = version === 1
+    ? v1SnapshotFields
+    : version === 2
+      ? v2SnapshotFields
+      : snapshotFields;
   let snapshotIsPlainObject = false;
 
   try {
@@ -550,18 +720,25 @@ function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
   let achievementRecords;
   let jobs = [];
   let requirements = [];
+  let legacyRequirements = [];
   let achievementMappings = [];
   try {
     profile = Object.getOwnPropertyDescriptor(snapshot, "profile")?.value;
     employmentRecords = Object.getOwnPropertyDescriptor(snapshot, "employmentRecords")?.value;
     achievementRecords = Object.getOwnPropertyDescriptor(snapshot, "achievementRecords")?.value;
-    if (version === SCHEMA_VERSION) {
+    if (version >= 2) {
       jobs = Object.getOwnPropertyDescriptor(snapshot, "jobs")?.value;
       requirements = Object.getOwnPropertyDescriptor(snapshot, "requirements")?.value;
       achievementMappings = Object.getOwnPropertyDescriptor(
         snapshot,
         "achievementMappings"
       )?.value;
+      if (version === 3) {
+        legacyRequirements = Object.getOwnPropertyDescriptor(
+          snapshot,
+          "legacyRequirements"
+        )?.value;
+      }
     }
   } catch {
     addError(errors, {
@@ -622,11 +799,44 @@ function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
     validateAchievementRecord,
     errors
   );
-  const validJobs = version === SCHEMA_VERSION
+  const validJobs = version >= 2
     ? validateRecordArray(jobs, "jobs", "job", validateJobRecord, errors)
     : [];
-  if (version === SCHEMA_VERSION) {
-    validatePlainObjectArray(requirements, "requirements", "requirement", errors);
+  let validRequirements = requirements;
+  if (version === 2) {
+    validateRequirementArrayShape(requirements, "requirements", errors);
+    validatePlainObjectArray(
+      achievementMappings,
+      "achievementMappings",
+      "achievement mapping",
+      errors
+    );
+  } else if (version === 3) {
+    validRequirements = validateRecordArray(
+      requirements,
+      "requirements",
+      "requirement",
+      validateRequirementRecord,
+      errors
+    );
+    const jobIds = new Set(validJobs.map((job) => job.id));
+    validRequirements.forEach((requirement, index) => {
+      if (!jobIds.has(requirement.jobId)) {
+        addError(errors, {
+          recordType: "requirement",
+          recordId: requirement.id,
+          field: `requirements[${index}].jobId`,
+          path: `requirements[${index}].jobId`,
+          modelField: "jobId",
+          message: `Job "${requirement.jobId}" does not exist.`
+        });
+      }
+    });
+    validateRequirementArrayShape(
+      legacyRequirements,
+      "legacyRequirements",
+      errors
+    );
     validatePlainObjectArray(
       achievementMappings,
       "achievementMappings",
@@ -660,7 +870,10 @@ function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
         employmentRecords,
         achievementRecords,
         jobs: validJobs,
-        requirements,
+        requirements: version === 3
+          ? validRequirements
+          : requirements,
+        ...(version === 3 ? { legacyRequirements } : {}),
         achievementMappings
       }
   };
@@ -855,9 +1068,11 @@ function validateEnvelope(envelope, version) {
 
   const fields = version === 1
     ? v1SnapshotFields
-    : version === SCHEMA_VERSION
-      ? snapshotFields
-      : [];
+    : version === 2
+      ? v2SnapshotFields
+      : version === SCHEMA_VERSION
+        ? snapshotFields
+        : [];
   const envelopeFields = ["version", ...fields];
   const expected = new Set(envelopeFields);
   for (const key of keys) {
@@ -903,12 +1118,12 @@ function makeCorruptError(errors) {
  * Public API:
  * - load(): return `missing`, `loaded`, `corrupt`, `unsupported-version`, or
  *   `unavailable`, with a validated snapshot where applicable.
- * - save(snapshot): validate and persist the complete version-2 envelope,
+ * - save(snapshot): validate and persist the complete version-3 envelope,
  *   returning a status result.
  *
- * Valid version-1 snapshots are returned as version-2 data in memory. Loading
- * never writes storage; corrupt or unsupported data disables writes for this
- * adapter instance.
+ * Valid version-1 and version-2 snapshots are migrated in memory to version 3.
+ * Loading never writes storage; corrupt or unsupported data disables writes
+ * for this adapter instance.
  */
 export function createCareerStorage(storage) {
   if (
@@ -1028,7 +1243,7 @@ export function createCareerStorage(storage) {
           writesDisabled: true
         };
       }
-      if (version !== 1 && version !== SCHEMA_VERSION) {
+      if (version !== 1 && version !== 2 && version !== SCHEMA_VERSION) {
         writesDisabled = true;
         return { status: "unsupported-version", version, writesDisabled: true };
       }
@@ -1046,7 +1261,12 @@ export function createCareerStorage(storage) {
       let snapshot;
       try {
         snapshot = {};
-        for (const field of version === 1 ? v1SnapshotFields : snapshotFields) {
+        const fields = version === 1
+          ? v1SnapshotFields
+          : version === 2
+            ? v2SnapshotFields
+            : snapshotFields;
+        for (const field of fields) {
           snapshot[field] = Object.getOwnPropertyDescriptor(envelope, field).value;
         }
       } catch {
@@ -1082,7 +1302,7 @@ export function createCareerStorage(storage) {
         };
       }
 
-      const migratedSnapshot = version === 1
+      const v2Snapshot = version === 1
         ? {
           ...validation.snapshot,
           jobs: [],
@@ -1090,7 +1310,37 @@ export function createCareerStorage(storage) {
           achievementMappings: []
         }
         : validation.snapshot;
-      return { status: "loaded", snapshot: migratedSnapshot };
+      const v2Validation = version === 1
+        ? validateSnapshot(v2Snapshot, 2)
+        : validation;
+      if (!v2Validation.valid) {
+        writesDisabled = true;
+        return {
+          status: "corrupt",
+          error: makeCorruptError(v2Validation.errors),
+          writesDisabled: true
+        };
+      }
+
+      const migratedSnapshot = version < 3
+        ? {
+          ...v2Validation.snapshot,
+          ...migrateV2Requirements(v2Validation.snapshot)
+        }
+        : v2Validation.snapshot;
+      const finalValidation = version < 3
+        ? validateSnapshot(migratedSnapshot, 3)
+        : validation;
+      if (!finalValidation.valid) {
+        writesDisabled = true;
+        return {
+          status: "corrupt",
+          error: makeCorruptError(finalValidation.errors),
+          writesDisabled: true
+        };
+      }
+
+      return { status: "loaded", snapshot: finalValidation.snapshot };
     },
 
     save(snapshot) {
@@ -1117,6 +1367,7 @@ export function createCareerStorage(storage) {
           achievementRecords: validation.snapshot.achievementRecords,
           jobs: validation.snapshot.jobs,
           requirements: validation.snapshot.requirements,
+          legacyRequirements: validation.snapshot.legacyRequirements,
           achievementMappings: validation.snapshot.achievementMappings
         });
       } catch {
