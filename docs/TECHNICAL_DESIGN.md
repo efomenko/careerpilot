@@ -98,8 +98,9 @@ timestamps from its caller where needed, returns copies so callers cannot
 mutate its internal state, and exposes mutation operations used by the UI.
 Requirement operations validate Job ownership, preserve immutable fields, and
 leave state unchanged for no-op updates. Requirement deletion also removes
-associated achievement mappings while preserving Achievement records. The
-state module is independent of the DOM and browser storage.
+associated Achievement mappings while preserving Achievement records. The
+state module also owns Achievement Mapping CRUD and deletion cascades; it is
+independent of the DOM and browser storage.
 `src/js/career-persistence.js` restores and validates the complete snapshot
 before rendering and saves after successful state mutations.
 
@@ -117,7 +118,7 @@ Responsibilities:
 - Implement Job construction and validation in `src/js/job-model.js`.
 - Implement Requirement construction and validation in
   `src/js/requirement-model.js`.
-- Map requirements to evidence.
+- Manage Requirement–Achievement mappings.
 - Calculate deterministic fit scores.
 - Build template-based drafts.
 - Detect known unsupported or unverified claims.
@@ -351,8 +352,63 @@ mappings but preserves Achievement records. Requirements remain manageable
 when their Job is archived.
 
 The Job detail UI lists Requirements and provides a shared create/edit form,
-validation feedback, and a confirmed delete action. It uses the state APIs;
-it does not manage achievement mappings directly.
+validation feedback, and a confirmed delete action. Each Requirement card
+displays mapped Achievements in Verified and Unverified groups, with counts
+for resolved Achievement records. `needs_confirmation` Achievements appear in
+the Unverified group. Users can open an Achievement from its evidence entry,
+unmap it, or open the Achievement selector.
+
+The selector searches Achievement title and context with trimmed,
+case-insensitive partial matching, excludes Achievements already mapped to
+that Requirement, and presents alphabetically ordered Verified and Unverified
+groups. It distinguishes no Achievements, all Achievements already mapped,
+and no search matches. When no Achievements exist, the selector can navigate
+to the dedicated Achievements workflow; the selected Job and Requirement
+context remains available when returning. Achievement deletion confirmation
+shows the number of mappings that will be removed and explains that related
+Requirements and Jobs remain while Fit Assessments may change.
+
+### Achievement Mapping (CP-022)
+
+```js
+{
+  id: "mapping-id",
+  requirementId: "requirement-id",
+  achievementId: "achievement-id",
+  createdAt: "2025-04-20T14:30:00.000Z",
+  updatedAt: "2025-04-20T14:30:00.000Z"
+}
+```
+
+An Achievement Mapping has exactly these five required fields. IDs and both
+timestamps must be non-blank strings; timestamps must be valid UTC timestamps
+in the canonical `YYYY-MM-DDTHH:mm:ss.SSSZ` format, and `updatedAt` cannot
+precede `createdAt`. The application creates the mapping ID and timestamps
+when the user selects an Achievement; the model does not generate them.
+There is no mapping update operation: mapping identity and its Requirement
+and Achievement relationship are immutable.
+
+`createAchievementMapping(record)` validates the record and verifies that
+both referenced records exist in state. It rejects duplicate mapping IDs and
+duplicate Requirement–Achievement pairs. The relationship is many-to-many:
+a Requirement can map to multiple Achievements, and an Achievement can map to
+Requirements across Jobs. Creation and deletion do not modify endpoint
+records or Achievement verification status.
+
+The state APIs are `createAchievementMapping(record)`,
+`deleteAchievementMapping(id)`,
+`getAchievementMappingsForRequirement(requirementId)`, and
+`getAchievementMappingsForAchievement(achievementId)`. Creation returns a
+detached copy; both retrieval APIs return detached copies in insertion order.
+Mapping mutations assign the resulting state and notify subscribers once on
+success; failed mutations leave state unchanged and do not notify.
+
+Deleting a Job removes its Requirements and mappings to those Requirements;
+deleting a Requirement removes its mappings; deleting an Achievement removes
+its mappings. Each cascade preserves the other Jobs, Requirements,
+Achievements, verification statuses, and unrelated or historical mappings
+not targeted by the deletion. Persistence retains mappings unchanged in the
+schema-v3 envelope and migration does not tighten mapping validation.
 
 ### Application draft (conceptual; not finalized by CP-010)
 

@@ -667,13 +667,14 @@
           class="achievement-delete-dialog"
           id="achievement-delete-dialog"
           aria-labelledby="achievement-delete-dialog-title"
-          aria-describedby="achievement-delete-dialog-description"
+          aria-describedby="achievement-delete-dialog-description achievement-delete-mapping-impact"
         >
           <h2 id="achievement-delete-dialog-title">Delete achievement?</h2>
           <p id="achievement-delete-dialog-description">
             Delete <strong id="achievement-delete-record-name">this achievement</strong>?
             This action cannot be undone.
           </p>
+          <p id="achievement-delete-mapping-impact" hidden></p>
           <div class="achievement-delete-dialog-actions">
             <button class="achievement-cancel" id="achievement-delete-cancel" type="button">
               Cancel
@@ -1090,6 +1091,87 @@
               type="button"
             >
               Delete Requirement
+            </button>
+          </div>
+        </dialog>
+
+        <dialog
+          class="achievement-mapping-selector-dialog"
+          id="achievement-mapping-selector-dialog"
+          aria-labelledby="achievement-mapping-selector-title"
+          aria-describedby="achievement-mapping-selector-description"
+        >
+          <h2 id="achievement-mapping-selector-title">Add an Achievement</h2>
+          <p id="achievement-mapping-selector-description">
+            Choose an existing Achievement to map to this Requirement:
+            <strong id="achievement-mapping-selector-requirement"></strong>
+          </p>
+          <div class="achievement-mapping-search">
+            <label for="achievement-mapping-search">Search Achievements</label>
+            <input
+              id="achievement-mapping-search"
+              type="search"
+              autocomplete="off"
+              aria-controls="achievement-mapping-results"
+            >
+          </div>
+          <div id="achievement-mapping-results" class="achievement-mapping-results">
+            <details
+              class="achievement-mapping-group"
+              id="achievement-mapping-verified-group"
+              open
+            >
+              <summary id="achievement-mapping-verified-heading">Verified (0)</summary>
+              <ul
+                class="achievement-mapping-options"
+                id="achievement-mapping-verified-list"
+                aria-label="Verified Achievements"
+              ></ul>
+            </details>
+            <details
+              class="achievement-mapping-group"
+              id="achievement-mapping-unverified-group"
+              open
+            >
+              <summary id="achievement-mapping-unverified-heading">Unverified (0)</summary>
+              <ul
+                class="achievement-mapping-options"
+                id="achievement-mapping-unverified-list"
+                aria-label="Unverified Achievements"
+              ></ul>
+            </details>
+          </div>
+          <p id="achievement-mapping-no-achievements" hidden>
+            Create an Achievement before mapping evidence to a Requirement.
+          </p>
+          <button
+            class="job-action"
+            id="achievement-mapping-go-to-achievements"
+            type="button"
+            hidden
+          >
+            Go to Achievements
+          </button>
+          <p id="achievement-mapping-all-mapped" hidden>
+            All existing Achievements are already mapped to this Requirement.
+          </p>
+          <div id="achievement-mapping-no-matches" hidden>
+            <p>No Achievements match your search</p>
+            <button
+              class="job-action"
+              id="achievement-mapping-search-clear"
+              type="button"
+            >
+              Clear search
+            </button>
+          </div>
+          <div class="achievement-mapping-selector-actions">
+            <button
+              class="achievement-cancel"
+              id="achievement-mapping-cancel"
+              type="button"
+            >
+              Cancel
             </button>
           </div>
         </dialog>

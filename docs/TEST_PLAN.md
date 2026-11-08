@@ -329,11 +329,55 @@ passed until run and reported.
 
 ### CP-022 — Evidence mapping
 
-- Map a requirement to a relevant achievement.
-- Map multiple achievements to one requirement.
-- Remove a mapping.
-- Test a requirement with no supporting evidence.
-- Test a missing or deleted evidence reference.
+#### Automated coverage
+
+- `tests/achievement-mapping-model.test.js`: verify mapping construction
+  initializes `updatedAt` from caller-supplied `createdAt`; validate the exact
+  fields, required values, canonical UTC timestamps, timestamp ordering,
+  unknown fields, invalid values, and non-mutation of inputs.
+- `tests/career-state.test.js`: verify creation requires existing Requirement
+  and Achievement endpoints, rejects duplicate mapping IDs and duplicate
+  Requirement–Achievement pairs atomically, supports many-to-many mappings,
+  and returns detached copies in insertion order. Verify mapping deletion
+  and failed mutations preserve endpoint records and do not notify.
+- `tests/career-state.test.js`: verify Job, Requirement, and Achievement
+  deletion cascades remove only targeted mappings and preserve unrelated
+  records and surviving Achievement verification statuses.
+- `tests/achievement-mapping-ui-helpers.test.js`: verify trimmed,
+  case-insensitive partial title/context search, mapped-Achievement exclusion,
+  Verified and Unverified grouping (including `needs_confirmation`),
+  case-insensitive alphabetical ordering, empty groups, and input
+  immutability. Also verify the no-Achievements, all-mapped, and no-matches
+  selector states and resolved evidence grouping/counts, including orphaned
+  mapping references.
+- `tests/career-storage.test.js` and `tests/career-persistence.test.js`:
+  verify v1 → v2 → v3 and v2 → v3 migration behavior, preservation of
+  mappings present in v2 snapshots, v1's empty mapping collection, and
+  persistence of restored mappings through later successful mutations.
+- No dedicated automated DOM/UI test harness exists; selector dialog,
+  navigation, focus, and confirmation rendering are not covered by automated
+  UI tests.
+
+#### Manual browser regression — completed
+
+The user confirmed that the Achievement evidence/selector browser checks and
+the complete Achievement deletion confirmation checklist passed.
+
+- Verify Requirement evidence groups, resolved counts, and empty states.
+- Open an Achievement from a Requirement; return to Jobs and confirm the same
+  Job and Requirement context remains available.
+- Open the mapping selector and verify title/context search, status grouping,
+  alphabetical order, exclusion of already-mapped Achievements, and immediate
+  mapping.
+- With no Achievements, navigate to the Achievements workflow, create an
+  Achievement, return to the same Job/Requirement, and map it.
+- Unmap an Achievement and verify its evidence group and count update.
+- Verify Achievement deletion confirmation for zero, one, and multiple
+  mappings. Cancel and confirm deletion; confirm related Requirements and Jobs,
+  unrelated Achievements, and unrelated mappings are preserved.
+- Use keyboard-only interaction to verify selector search, result selection,
+  Escape/Cancel behavior, dialog focus, and return focus. Check responsive
+  layout and the browser console for errors.
 
 ### CP-023 and CP-024 — Scoring
 

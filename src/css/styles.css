@@ -1528,7 +1528,8 @@ a:focus-visible {
 .job-dialog,
 .job-delete-dialog,
 .requirement-dialog,
-.requirement-delete-dialog {
+.requirement-delete-dialog,
+.achievement-mapping-selector-dialog {
   width: min(680px, calc(100vw - 32px));
   max-width: 100%;
   max-height: calc(100vh - 32px);
@@ -1546,7 +1547,8 @@ a:focus-visible {
 .job-dialog::backdrop,
 .job-delete-dialog::backdrop,
 .requirement-dialog::backdrop,
-.requirement-delete-dialog::backdrop {
+.requirement-delete-dialog::backdrop,
+.achievement-mapping-selector-dialog::backdrop {
   background: rgb(37 36 58 / 56%);
   backdrop-filter: blur(2px);
 }
@@ -1554,7 +1556,8 @@ a:focus-visible {
 .job-dialog > h2,
 .job-delete-dialog > h2,
 .requirement-dialog > h2,
-.requirement-delete-dialog > h2 {
+.requirement-delete-dialog > h2,
+.achievement-mapping-selector-dialog > h2 {
   margin: 0;
   font-size: clamp(21px, 3vw, 26px);
   line-height: 1.25;
@@ -1564,7 +1567,8 @@ a:focus-visible {
 .job-dialog > p,
 .job-delete-dialog > p,
 .requirement-dialog > p,
-.requirement-delete-dialog > p {
+.requirement-delete-dialog > p,
+.achievement-mapping-selector-dialog > p {
   margin: 10px 0 0;
   color: var(--color-muted);
   font-size: 14px;
@@ -1582,6 +1586,114 @@ a:focus-visible {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 22px;
+}
+
+.achievement-mapping-search {
+  display: grid;
+  gap: 7px;
+  margin-top: 20px;
+}
+
+.achievement-mapping-search label {
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.achievement-mapping-search input {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 11px;
+  color: var(--color-text);
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.achievement-mapping-search input:focus-visible {
+  outline: 3px solid #5140bd;
+  outline-offset: 2px;
+}
+
+.achievement-mapping-results {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.achievement-mapping-group {
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+}
+
+.achievement-mapping-group summary {
+  padding: 11px 13px;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.achievement-mapping-group summary:focus-visible {
+  outline: 3px solid #5140bd;
+  outline-offset: 2px;
+}
+
+.achievement-mapping-options {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0 10px 10px;
+  list-style: none;
+}
+
+.achievement-mapping-option {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+  padding: 10px 12px;
+  color: var(--color-text);
+  text-align: left;
+  background: #faf9ff;
+  border: 1px solid #e1deee;
+  border-radius: 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.achievement-mapping-option:hover {
+  background: #f0edff;
+}
+
+.achievement-mapping-option:focus-visible {
+  outline: 3px solid #5140bd;
+  outline-offset: 2px;
+}
+
+.achievement-mapping-option__title {
+  font-size: 14px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.achievement-mapping-option__context {
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.achievement-mapping-selector-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
+.achievement-mapping-selector-dialog > #achievement-mapping-go-to-achievements {
+  margin-top: 12px;
 }
 
 .job-form {
@@ -2149,6 +2261,67 @@ a:focus-visible {
   border-color: #cfcfdb;
 }
 
+.job-requirement__evidence {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.job-requirement__evidence-group {
+  min-width: 0;
+  padding: 10px;
+  background: #faf9ff;
+  border: 1px solid #e1deee;
+  border-radius: 8px;
+}
+
+.job-requirement__evidence-heading {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.job-requirement__evidence-empty,
+.job-requirement__evidence-context {
+  margin: 5px 0 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.job-requirement__evidence-list {
+  display: grid;
+  gap: 10px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.job-requirement__evidence-item {
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid #e1deee;
+}
+
+.job-requirement__evidence-title {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.job-requirement__evidence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .job-requirement__actions {
   display: flex;
   flex-wrap: wrap;
@@ -2220,6 +2393,14 @@ a:focus-visible {
   }
 
   .job-requirement__actions button {
+    width: 100%;
+  }
+
+  .job-requirement__evidence-actions {
+    flex-direction: column;
+  }
+
+  .job-requirement__evidence-actions button {
     width: 100%;
   }
 

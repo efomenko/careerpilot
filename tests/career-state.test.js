@@ -109,6 +109,17 @@ function completeRequirement(id, jobId, overrides = {}) {
   };
 }
 
+function completeAchievementMapping(id, requirementId, achievementId, overrides = {}) {
+  return {
+    id,
+    requirementId,
+    achievementId,
+    createdAt,
+    updatedAt: createdAt,
+    ...overrides
+  };
+}
+
 function emptySnapshot(overrides = {}) {
   return {
     profile: null,
@@ -559,6 +570,11 @@ test("archives and reactivates Jobs idempotently", () => {
 
 test("deletes a Job and cascades only its Requirements and their mappings", () => {
   const snapshot = completeSnapshot({
+    achievementRecords: [
+      completeAchievement("achievement-1", {
+        verificationStatus: "verified"
+      })
+    ],
     jobs: [
       completeJob("job-1"),
       completeJob("job-2", { company: "Other Company" })
@@ -572,7 +588,8 @@ test("deletes a Job and cascades only its Requirements and their mappings", () =
       { id: "mapping-1", requirementId: "requirement-1", achievementId: "achievement-1" },
       { id: "mapping-2", requirementId: "requirement-2", achievementId: "achievement-1" },
       { id: "mapping-3", requirementId: "requirement-3", achievementId: "achievement-1" },
-      { id: "mapping-unrelated", requirementId: "missing", achievementId: "achievement-1" }
+      { id: "mapping-unrelated", requirementId: "missing", achievementId: "achievement-1" },
+      { id: "mapping-historical" }
     ]
   });
   const notifications = [];
@@ -592,7 +609,7 @@ test("deletes a Job and cascades only its Requirements and their mappings", () =
   assert.deepEqual(state.getSnapshot().requirements, [snapshot.requirements[2]]);
   assert.deepEqual(
     state.getSnapshot().achievementMappings,
-    [snapshot.achievementMappings[2], snapshot.achievementMappings[3]]
+    [snapshot.achievementMappings[2], snapshot.achievementMappings[3], snapshot.achievementMappings[4]]
   );
   assert.deepEqual(state.getAchievementRecords(), snapshot.achievementRecords);
   assert.equal(notifications.length, 1);
@@ -678,6 +695,183 @@ test("Job and future relationship snapshots are detached from internal state", (
     requirementId: "requirement-1",
     achievementId: "achievement-1"
   }]);
+});
+
+test("creates Achievement Mappings for existing endpoints and returns detached copies", () => {
+  const state = createCareerState();
+  const snapshot = completeSnapshot({
+    jobs: [completeJob("job-1")],
+    requirements: [completeRequirement("requirement-1", "job-1")],
+    achievementRecords: [completeAchievement("achievement-1", {
+      verificationStatus: "verified"
+    })]
+  });
+  state.restoreSnapshot(snapshot);
+
+  const mapping = completeAchievementMapping(
+    "mapping-1",
+    "requirement-1",
+    "achievement-1"
+  );
+  const created = state.createAchievementMapping(mapping);
+
+  assert.deepEqual(created, mapping);
+  assert.notEqual(created, mapping);
+  created.requirementId = "changed";
+  mapping.achievementId = "changed";
+  assert.deepEqual(state.getSnapshot().achievementMappings, [
+    completeAchievementMapping("mapping-1", "requirement-1", "achievement-1")
+  ]);
+  assert.deepEqual(state.getRequirements("job-1"), snapshot.requirements);
+  assert.deepEqual(state.getAchievementRecords(), snapshot.achievementRecords);
+});
+
+test("rejects missing references, duplicate mapping IDs, and duplicate pairs atomically", () => {
+  const notifications = [];
+  const state = createCareerState({
+    onMutation(getSnapshot) {
+      notifications.push(getSnapshot());
+    }
+  });
+  state.restoreSnapshot(completeSnapshot({
+    jobs: [completeJob("job-1"), completeJob("job-2")],
+    requirements: [
+      completeRequirement("requirement-1", "job-1"),
+      completeRequirement("requirement-2", "job-2")
+    ],
+    achievementRecords: [
+      completeAchievement("achievement-1"),
+      completeAchievement("achievement-2")
+    ]
+  }));
+  state.createAchievementMapping(
+    completeAchievementMapping("mapping-1", "requirement-1", "achievement-1")
+  );
+  notifications.length = 0;
+  const before = state.getSnapshot();
+
+  const failures = [
+    [
+      completeAchievementMapping("missing-requirement", "missing", "achievement-1"),
+      "NOT_FOUND",
+      /Requirement "missing" does not exist/
+    ],
+    [
+      completeAchievementMapping("missing-achievement", "requirement-1", "missing"),
+      "NOT_FOUND",
+      /Achievement "missing" does not exist/
+    ],
+    [
+      completeAchievementMapping("mapping-1", "requirement-2", "achievement-2"),
+      "DUPLICATE_ID",
+      /Achievement Mapping with ID "mapping-1" already exists/
+    ],
+    [
+      completeAchievementMapping("mapping-2", "requirement-1", "achievement-1"),
+      "DUPLICATE_PAIR",
+      /already mapped to Achievement/
+    ],
+    [
+      completeAchievementMapping("invalid", "requirement-1", "achievement-2", {
+        updatedAt: "invalid"
+      }),
+      "VALIDATION_ERROR",
+      /Achievement Mapping record is invalid/
+    ]
+  ];
+
+  for (const [mapping, code, message] of failures) {
+    assert.throws(
+      () => state.createAchievementMapping(mapping),
+      (error) => error.code === code && message.test(error.message)
+    );
+    assert.deepEqual(state.getSnapshot(), before);
+    assert.equal(notifications.length, 0);
+  }
+});
+
+test("lists mappings by either endpoint in insertion order with detached copies", () => {
+  const notifications = [];
+  const state = createCareerState({
+    onMutation(getSnapshot) {
+      notifications.push(getSnapshot());
+    }
+  });
+  state.restoreSnapshot(completeSnapshot({
+    jobs: [completeJob("job-1"), completeJob("job-2")],
+    requirements: [
+      completeRequirement("requirement-1", "job-1"),
+      completeRequirement("requirement-2", "job-2")
+    ],
+    achievementRecords: [
+      completeAchievement("achievement-1"),
+      completeAchievement("achievement-2")
+    ]
+  }));
+  const mappings = [
+    completeAchievementMapping("mapping-1", "requirement-1", "achievement-1"),
+    completeAchievementMapping("mapping-2", "requirement-1", "achievement-2"),
+    completeAchievementMapping("mapping-3", "requirement-2", "achievement-1")
+  ];
+  mappings.forEach((mapping, index) => {
+    state.createAchievementMapping(mapping);
+    assert.equal(notifications.length, index + 1);
+    assert.deepEqual(
+      notifications[index].achievementMappings,
+      mappings.slice(0, index + 1)
+    );
+  });
+  notifications.length = 0;
+
+  const forRequirement = state.getAchievementMappingsForRequirement("requirement-1");
+  const forAchievement = state.getAchievementMappingsForAchievement("achievement-1");
+  assert.deepEqual(forRequirement, mappings.slice(0, 2));
+  assert.deepEqual(forAchievement, [mappings[0], mappings[2]]);
+  forRequirement[0].achievementId = "changed";
+  forAchievement[0].requirementId = "changed";
+  assert.deepEqual(state.getAchievementMappingsForRequirement("requirement-1"), mappings.slice(0, 2));
+  assert.deepEqual(state.getAchievementMappingsForAchievement("achievement-1"), [
+    mappings[0],
+    mappings[2]
+  ]);
+  assert.equal(notifications.length, 0);
+  assert.deepEqual(notifications, []);
+});
+
+test("deletes mappings once without modifying endpoints and rejects missing IDs", () => {
+  const notifications = [];
+  const state = createCareerState({
+    onMutation(getSnapshot) {
+      notifications.push(getSnapshot());
+    }
+  });
+  const snapshot = completeSnapshot({
+    jobs: [completeJob("job-1")],
+    requirements: [completeRequirement("requirement-1", "job-1")],
+    achievementRecords: [completeAchievement("achievement-1", {
+      verificationStatus: "verified"
+    })],
+    achievementMappings: [
+      completeAchievementMapping("mapping-1", "requirement-1", "achievement-1")
+    ]
+  });
+  state.restoreSnapshot(snapshot);
+
+  state.deleteAchievementMapping("mapping-1");
+  assert.deepEqual(state.getSnapshot().achievementMappings, []);
+  assert.deepEqual(state.getRequirements("job-1"), snapshot.requirements);
+  assert.deepEqual(state.getAchievementRecords(), snapshot.achievementRecords);
+  assert.equal(notifications.length, 1);
+  assert.deepEqual(notifications[0], state.getSnapshot());
+
+  const afterDelete = state.getSnapshot();
+  assert.throws(
+    () => state.deleteAchievementMapping("missing"),
+    (error) => error.code === "NOT_FOUND"
+      && /Achievement Mapping "missing" does not exist/.test(error.message)
+  );
+  assert.deepEqual(state.getSnapshot(), afterDelete);
+  assert.equal(notifications.length, 1);
 });
 
 test("creates Requirements with validation, safe copies, and duplicate ID protection", () => {
@@ -919,9 +1113,15 @@ test("deletes Requirements and their mappings while preserving other records", (
         id: "mapping-unrelated",
         requirementId: "missing",
         achievementId: "achievement-1"
+      },
+      {
+        id: "mapping-historical"
       }
     ];
     const initialSnapshot = completeSnapshot({
+      achievementRecords: [completeAchievement("achievement-1", {
+        verificationStatus: "verified"
+      })],
       jobs: [completeJob("job-1")],
       requirements: [targetRequirement, otherRequirement],
       achievementMappings: [...targetMappings, ...otherMappings]
@@ -940,6 +1140,109 @@ test("deletes Requirements and their mappings while preserving other records", (
     assert.deepEqual(state.getAchievementRecords(), initialSnapshot.achievementRecords);
     assert.equal(notifications.length, 1);
     assert.deepEqual(notifications[0], state.getSnapshot());
+  }
+});
+
+test("deleting an Achievement cascades its mappings atomically and preserves other records", () => {
+  const snapshot = completeSnapshot({
+    jobs: [completeJob("job-1"), completeJob("job-2")],
+    requirements: [
+      completeRequirement("requirement-1", "job-1"),
+      completeRequirement("requirement-2", "job-2")
+    ],
+    achievementRecords: [
+      completeAchievement("achievement-delete", {
+        verificationStatus: "verified"
+      }),
+      completeAchievement("achievement-keep-verified", {
+        verificationStatus: "verified"
+      }),
+      completeAchievement("achievement-keep-unverified")
+    ],
+    achievementMappings: [
+      completeAchievementMapping("mapping-delete-1", "requirement-1", "achievement-delete"),
+      completeAchievementMapping("mapping-keep", "requirement-1", "achievement-keep-verified"),
+      completeAchievementMapping("mapping-delete-2", "requirement-2", "achievement-delete"),
+      completeAchievementMapping("mapping-orphan-requirement", "missing", "achievement-delete"),
+      completeAchievementMapping("mapping-orphan-achievement", "requirement-2", "missing"),
+      { id: "mapping-historical" }
+    ]
+  });
+  const notifications = [];
+  const state = createCareerState({
+    onMutation(getSnapshot) {
+      notifications.push(getSnapshot());
+    }
+  });
+  state.restoreSnapshot(snapshot);
+
+  state.deleteAchievementRecord("achievement-delete");
+
+  assert.deepEqual(state.getSnapshot().achievementMappings, [
+    snapshot.achievementMappings[1],
+    snapshot.achievementMappings[4],
+    snapshot.achievementMappings[5]
+  ]);
+  assert.deepEqual(state.getAchievementRecords(), [
+    snapshot.achievementRecords[1],
+    snapshot.achievementRecords[2]
+  ]);
+  assert.deepEqual(state.getSnapshot().requirements, snapshot.requirements);
+  assert.deepEqual(state.getJobs(), snapshot.jobs);
+  assert.deepEqual(state.getSnapshot(), notifications[0]);
+  assert.equal(notifications.length, 1);
+  assert.equal(state.getAchievementRecords()[0].verificationStatus, "verified");
+  assert.equal(state.getAchievementRecords()[1].verificationStatus, "unverified");
+
+  const afterDelete = state.getSnapshot();
+  assert.throws(
+    () => state.deleteAchievementRecord("missing"),
+    /Achievement record "missing" does not exist/
+  );
+  assert.deepEqual(state.getSnapshot(), afterDelete);
+  assert.equal(notifications.length, 1);
+});
+
+test("Achievement deletion preserves Jobs and Requirements with zero or one mapping", () => {
+  for (const mappingCount of [0, 1]) {
+    const targetAchievementId = "achievement-delete";
+    const targetMapping = completeAchievementMapping(
+      "mapping-delete",
+      "requirement-1",
+      targetAchievementId
+    );
+    const unrelatedMapping = completeAchievementMapping(
+      "mapping-keep",
+      "requirement-1",
+      "achievement-keep"
+    );
+    const snapshot = completeSnapshot({
+      jobs: [completeJob("job-1")],
+      requirements: [completeRequirement("requirement-1", "job-1")],
+      achievementRecords: [
+        completeAchievement(targetAchievementId),
+        completeAchievement("achievement-keep")
+      ],
+      achievementMappings: [
+        ...(mappingCount === 1 ? [targetMapping] : []),
+        unrelatedMapping
+      ]
+    });
+    const state = createCareerState();
+    state.restoreSnapshot(snapshot);
+
+    assert.equal(
+      state.getAchievementMappingsForAchievement(targetAchievementId).length,
+      mappingCount
+    );
+    const beforeDeletion = state.getSnapshot();
+    state.deleteAchievementRecord(targetAchievementId);
+
+    assert.deepEqual(state.getJobs(), snapshot.jobs);
+    assert.deepEqual(state.getSnapshot().requirements, snapshot.requirements);
+    assert.deepEqual(state.getAchievementRecords(), [snapshot.achievementRecords[1]]);
+    assert.deepEqual(state.getSnapshot().achievementMappings, [unrelatedMapping]);
+    assert.notDeepEqual(state.getSnapshot(), beforeDeletion);
   }
 });
 

@@ -5,7 +5,12 @@ import { createNavigationController } from "./navigation.js";
 import { createNotifications } from "./notifications.js";
 import { createJobRecord } from "./job-model.js";
 import { createRequirementRecord } from "./requirement-model.js";
+import { createAchievementMappingRecord } from "./achievement-mapping-model.js";
 import { getJobListResults } from "./job-ui-helpers.js";
+import {
+  getAchievementMappingSelectorState,
+  getMappedAchievementEvidence
+} from "./achievement-mapping-ui-helpers.js";
 import { clearFieldError, showFieldError } from "./feedback.js";
 import { validateRequired } from "./validation.js";
 
@@ -135,6 +140,9 @@ const achievementSubmit = document.querySelector("#achievement-submit");
 const achievementCancel = document.querySelector("#achievement-cancel");
 const achievementDeleteDialog = document.querySelector("#achievement-delete-dialog");
 const achievementDeleteRecordName = document.querySelector("#achievement-delete-record-name");
+const achievementDeleteMappingImpact = document.querySelector(
+  "#achievement-delete-mapping-impact"
+);
 const achievementDeleteCancel = document.querySelector("#achievement-delete-cancel");
 const achievementDeleteConfirm = document.querySelector("#achievement-delete-confirm");
 const achievementActions = document.querySelector("#achievement-actions");
@@ -180,6 +188,52 @@ const requirementDeleteDialog = document.querySelector("#requirement-delete-dial
 const requirementDeleteDescription = document.querySelector("#requirement-delete-description");
 const requirementDeleteCancel = document.querySelector("#requirement-delete-cancel");
 const requirementDeleteConfirm = document.querySelector("#requirement-delete-confirm");
+const achievementMappingSelectorDialog = document.querySelector(
+  "#achievement-mapping-selector-dialog"
+);
+const achievementMappingSelectorRequirement = document.querySelector(
+  "#achievement-mapping-selector-requirement"
+);
+const achievementMappingSearch = document.querySelector("#achievement-mapping-search");
+const achievementMappingSearchClear = document.querySelector(
+  "#achievement-mapping-search-clear"
+);
+const achievementMappingResults = document.querySelector(
+  "#achievement-mapping-results"
+);
+const achievementMappingVerifiedGroup = document.querySelector(
+  "#achievement-mapping-verified-group"
+);
+const achievementMappingVerifiedHeading = document.querySelector(
+  "#achievement-mapping-verified-heading"
+);
+const achievementMappingVerifiedList = document.querySelector(
+  "#achievement-mapping-verified-list"
+);
+const achievementMappingUnverifiedGroup = document.querySelector(
+  "#achievement-mapping-unverified-group"
+);
+const achievementMappingUnverifiedHeading = document.querySelector(
+  "#achievement-mapping-unverified-heading"
+);
+const achievementMappingUnverifiedList = document.querySelector(
+  "#achievement-mapping-unverified-list"
+);
+const achievementMappingNoAchievements = document.querySelector(
+  "#achievement-mapping-no-achievements"
+);
+const achievementMappingAllMapped = document.querySelector(
+  "#achievement-mapping-all-mapped"
+);
+const achievementMappingNoMatches = document.querySelector(
+  "#achievement-mapping-no-matches"
+);
+const achievementMappingGoToAchievements = document.querySelector(
+  "#achievement-mapping-go-to-achievements"
+);
+const achievementMappingCancel = document.querySelector(
+  "#achievement-mapping-cancel"
+);
 const requirementControls = {
   description: document.querySelector("#requirement-description"),
   category: document.querySelector("#requirement-category"),
@@ -242,6 +296,8 @@ let editingRequirementJobId = null;
 let requirementFormSnapshot = "";
 let pendingRequirementDeletion = null;
 let isDeletingRequirement = false;
+let activeAchievementMappingSelection = null;
+let pendingMappingReturnContext = null;
 
 // Each view supplies the label and status shown when its hash is selected.
 const views = {
@@ -704,8 +760,256 @@ function formatRequirementCategory(category) {
   return category[0].toUpperCase() + category.slice(1);
 }
 
+function renderAchievementMappingResults() {
+  const selection = activeAchievementMappingSelection;
+  if (!selection) {
+    return;
+  }
+
+  const achievements = careerState.getAchievementRecords();
+  const mappings = careerState.getAchievementMappingsForRequirement(
+    selection.requirementId
+  );
+  const selectorState = getAchievementMappingSelectorState(
+    achievements,
+    achievementMappingSearch.value,
+    mappings.map((mapping) => mapping.achievementId)
+  );
+  const { results } = selectorState;
+
+  achievementMappingResults.hidden = selectorState.status !== "results";
+  achievementMappingNoAchievements.hidden = selectorState.status !== "no-achievements";
+  achievementMappingGoToAchievements.hidden =
+    selectorState.status !== "no-achievements";
+  achievementMappingAllMapped.hidden = selectorState.status !== "all-mapped";
+  achievementMappingNoMatches.hidden = selectorState.status !== "no-matches";
+  achievementMappingVerifiedGroup.hidden = results.verified.length === 0;
+  achievementMappingUnverifiedGroup.hidden = results.unverified.length === 0;
+  achievementMappingVerifiedHeading.textContent =
+    `Verified (${results.verified.length})`;
+  achievementMappingUnverifiedHeading.textContent =
+    `Unverified (${results.unverified.length})`;
+  achievementMappingVerifiedList.replaceChildren();
+  achievementMappingUnverifiedList.replaceChildren();
+
+  [
+    [results.verified, achievementMappingVerifiedList],
+    [results.unverified, achievementMappingUnverifiedList]
+  ].forEach(([records, list]) => {
+    records.forEach((record) => {
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.className = "achievement-mapping-option";
+      button.type = "button";
+      button.setAttribute("aria-label", `Map Achievement: ${record.title}`);
+
+      const title = document.createElement("span");
+      title.className = "achievement-mapping-option__title";
+      title.textContent = record.title;
+
+      const context = document.createElement("span");
+      context.className = "achievement-mapping-option__context";
+      context.textContent = record.context || "No context provided.";
+
+      button.append(title, context);
+      button.addEventListener("click", () => createRequirementAchievementMapping(record));
+      item.append(button);
+      list.append(item);
+    });
+  });
+}
+
+function openAchievementMappingSelector({ invoker, jobId, requirement }) {
+  if (dialogManager.isOpen()) {
+    return;
+  }
+
+  activeAchievementMappingSelection = {
+    jobId,
+    requirementId: requirement.id
+  };
+  achievementMappingSelectorRequirement.textContent = requirement.description;
+  achievementMappingSearch.value = "";
+  achievementMappingVerifiedGroup.open = true;
+  achievementMappingUnverifiedGroup.open = true;
+  renderAchievementMappingResults();
+
+  try {
+    openDialogWithNavigation(achievementMappingSelectorDialog, {
+      invoker,
+      initialFocus: achievementMappingSearch,
+      isDirty: () => false
+    });
+  } catch (error) {
+    activeAchievementMappingSelection = null;
+    notifications.show(
+      "error",
+      error.message || "The Achievement selector could not be opened."
+    );
+  }
+}
+
+function createRequirementAchievementMapping(achievement) {
+  const selection = activeAchievementMappingSelection;
+  if (!selection || !achievementMappingSelectorDialog.open) {
+    return;
+  }
+
+  try {
+    const createdAt = new Date().toISOString();
+    const mapping = createAchievementMappingRecord({
+      requirementId: selection.requirementId,
+      achievementId: achievement.id
+    }, {
+      id: createRecordId(),
+      createdAt
+    });
+    careerState.createAchievementMapping(mapping);
+  } catch (error) {
+    notifications.show(
+      "error",
+      error.message || "The Achievement could not be mapped to this Requirement."
+    );
+    return;
+  }
+
+  const { jobId, requirementId } = selection;
+  dialogManager.closeAfterMutation();
+  activeAchievementMappingSelection = null;
+  renderJobRequirements(jobId);
+  focusRequirementAction(requirementId, "open-achievement");
+  notifications.show("success", "Achievement mapped to Requirement.");
+}
+
+function goToAchievementsFromMappingSelector() {
+  const selection = activeAchievementMappingSelection;
+  if (!selection || !achievementMappingSelectorDialog.open) {
+    return;
+  }
+
+  pendingMappingReturnContext = {
+    jobId: selection.jobId,
+    requirementId: selection.requirementId
+  };
+  dialogManager.closeAfterMutation();
+  activeAchievementMappingSelection = null;
+
+  if (!navigation.navigate("achievements")) {
+    pendingMappingReturnContext = null;
+    notifications.show("error", "The Achievements page could not be opened.");
+    return;
+  }
+  achievementCreateAction.focus();
+}
+
+function openAchievementFromRequirement(achievementId) {
+  if (!navigation.navigate("achievements")) {
+    notifications.show("error", "The Achievements page could not be opened.");
+    return;
+  }
+
+  const achievementCard = [...achievementList.querySelectorAll(".achievement-record")]
+    .find((item) => item.dataset.achievementId === achievementId);
+  if (!achievementCard) {
+    notifications.show("error", "The Achievement could not be found.");
+    return;
+  }
+
+  achievementCard.focus();
+  achievementCard.scrollIntoView({ block: "center" });
+}
+
+function unmapAchievementFromRequirement(mappingId, requirementId, jobId) {
+  try {
+    careerState.deleteAchievementMapping(mappingId);
+  } catch (error) {
+    notifications.show(
+      "error",
+      error.message || "The Achievement could not be unmapped."
+    );
+    return;
+  }
+
+  renderJobRequirements(jobId);
+  if (
+    !jobDetailPanel.hidden
+    && jobDetailPanel.dataset.jobId === jobId
+  ) {
+    focusRequirementAction(requirementId, "unmap-achievement")
+      || focusRequirementAction(requirementId, "edit");
+  }
+  notifications.show("success", "Achievement unmapped from Requirement.");
+}
+
+function renderAchievementEvidenceGroup(requirementId, jobId, label, group) {
+  const section = document.createElement("section");
+  section.className = "job-requirement__evidence-group";
+
+  const heading = document.createElement("h4");
+  heading.className = "job-requirement__evidence-heading";
+  heading.textContent = `${label} (${group.count})`;
+  section.append(heading);
+
+  if (group.entries.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "job-requirement__evidence-empty";
+    empty.textContent = "No mapped Achievements.";
+    section.append(empty);
+    return section;
+  }
+
+  const list = document.createElement("ul");
+  list.className = "job-requirement__evidence-list";
+  group.entries.forEach(({ mapping, achievement }) => {
+    const item = document.createElement("li");
+    item.className = "job-requirement__evidence-item";
+
+    const title = document.createElement("p");
+    title.className = "job-requirement__evidence-title";
+    title.textContent = achievement.title;
+
+    const context = document.createElement("p");
+    context.className = "job-requirement__evidence-context";
+    context.textContent = achievement.context || "No context provided.";
+
+    const actions = document.createElement("div");
+    actions.className = "job-requirement__evidence-actions";
+
+    const openButton = document.createElement("button");
+    openButton.className = "job-action";
+    openButton.type = "button";
+    openButton.dataset.requirementAction = "open-achievement";
+    openButton.textContent = "Open Achievement";
+    openButton.setAttribute("aria-label", `Open Achievement: ${achievement.title}`);
+    openButton.addEventListener("click", () =>
+      openAchievementFromRequirement(achievement.id)
+    );
+
+    const unmapButton = document.createElement("button");
+    unmapButton.className = "job-action";
+    unmapButton.type = "button";
+    unmapButton.dataset.requirementAction = "unmap-achievement";
+    unmapButton.textContent = "Unmap";
+    unmapButton.setAttribute(
+      "aria-label",
+      `Unmap ${achievement.title} from this Requirement`
+    );
+    unmapButton.addEventListener("click", () =>
+      unmapAchievementFromRequirement(mapping.id, requirementId, jobId)
+    );
+
+    actions.append(openButton, unmapButton);
+    item.append(title, context, actions);
+    list.append(item);
+  });
+
+  section.append(list);
+  return section;
+}
+
 function renderJobRequirements(jobId) {
   const records = careerState.getRequirements(jobId);
+  const achievements = careerState.getAchievementRecords();
   jobRequirementsList.replaceChildren();
   jobRequirementsEmpty.hidden = records.length > 0;
 
@@ -734,8 +1038,44 @@ function renderJobRequirements(jobId) {
 
     details.append(category, importance);
 
+    const mappings = careerState.getAchievementMappingsForRequirement(record.id);
+    const evidence = getMappedAchievementEvidence(mappings, achievements);
+    const evidenceSection = document.createElement("section");
+    evidenceSection.className = "job-requirement__evidence";
+    evidenceSection.setAttribute(
+      "aria-label",
+      `Achievement evidence for ${record.description}`
+    );
+    evidenceSection.append(
+      renderAchievementEvidenceGroup(
+        record.id,
+        jobId,
+        "Verified Achievements",
+        evidence.verified
+      ),
+      renderAchievementEvidenceGroup(
+        record.id,
+        jobId,
+        "Unverified Achievements",
+        evidence.unverified
+      )
+    );
+
     const actions = document.createElement("div");
     actions.className = "job-requirement__actions";
+
+    const addAchievementButton = document.createElement("button");
+    addAchievementButton.className = "job-action";
+    addAchievementButton.type = "button";
+    addAchievementButton.dataset.requirementAction = "add-achievement";
+    addAchievementButton.textContent = "Add Achievement";
+    addAchievementButton.addEventListener("click", () =>
+      openAchievementMappingSelector({
+        invoker: addAchievementButton,
+        jobId,
+        requirement: record
+      })
+    );
 
     const editButton = document.createElement("button");
     editButton.className = "job-action";
@@ -761,8 +1101,8 @@ function renderJobRequirements(jobId) {
       openRequirementDeleteDialog(record, deleteButton)
     );
 
-    actions.append(editButton, deleteButton);
-    article.append(description, details, actions);
+    actions.append(addAchievementButton, editButton, deleteButton);
+    article.append(description, details, evidenceSection, actions);
     jobRequirementsList.append(article);
   });
 }
@@ -1860,6 +2200,7 @@ function renderAchievementRecords() {
     const article = document.createElement("article");
     article.className = "achievement-record";
     article.dataset.achievementId = record.id;
+    article.tabIndex = -1;
     article.setAttribute("role", "listitem");
 
     const heading = document.createElement("h3");
@@ -2157,6 +2498,22 @@ function openAchievementDeleteDialog(record, invoker) {
       ?? null
   };
   achievementDeleteRecordName.textContent = record.title;
+  try {
+    const mappingCount = careerState
+      .getAchievementMappingsForAchievement(record.id)
+      .length;
+    achievementDeleteMappingImpact.hidden = mappingCount === 0;
+    achievementDeleteMappingImpact.textContent = mappingCount === 1
+      ? "Deleting this Achievement will remove 1 mapping. The related Requirements and Jobs will remain, but Fit Assessments may change."
+      : `Deleting this Achievement will remove ${mappingCount} mappings. The related Requirements and Jobs will remain, but Fit Assessments may change.`;
+  } catch (error) {
+    pendingAchievementDeletion = null;
+    notifications.show(
+      "error",
+      error.message || "The Achievement mappings could not be checked."
+    );
+    return;
+  }
 
   try {
     dialogManager.open(achievementDeleteDialog, {
@@ -2380,6 +2737,24 @@ requirementDeleteCancel.addEventListener("click", () => {
   pendingRequirementDeletion = null;
 });
 requirementDeleteConfirm.addEventListener("click", confirmRequirementDeletion);
+achievementMappingSearch.addEventListener("input", renderAchievementMappingResults);
+achievementMappingSearchClear.addEventListener("click", () => {
+  achievementMappingSearch.value = "";
+  renderAchievementMappingResults();
+  achievementMappingSearch.focus();
+});
+achievementMappingGoToAchievements.addEventListener(
+  "click",
+  goToAchievementsFromMappingSelector
+);
+achievementMappingCancel.addEventListener("click", () => {
+  dialogManager.requestClose();
+});
+achievementMappingSelectorDialog.addEventListener("close", () => {
+  if (!achievementMappingSelectorDialog.open) {
+    activeAchievementMappingSelection = null;
+  }
+});
 jobEditAction.addEventListener("click", () => {
   const record = careerState.getJobs()
     .find((item) => item.id === jobDetailPanel.dataset.jobId);
@@ -2502,6 +2877,9 @@ function navigateTo(viewName, { focusDestination = false } = {}) {
 
   if (viewName === "jobs") {
     renderJobRecords();
+    if (!jobDetailPanel.hidden) {
+      renderJobRequirements(jobDetailPanel.dataset.jobId);
+    }
   }
 
   currentSection.textContent = view.label;
@@ -2512,6 +2890,20 @@ function navigateTo(viewName, { focusDestination = false } = {}) {
 
   if (menuWasOpen || focusDestination) {
     document.querySelector("#main-content").focus();
+  }
+
+  if (
+    viewName === "jobs"
+    && pendingMappingReturnContext
+  ) {
+    const { jobId, requirementId } = pendingMappingReturnContext;
+    pendingMappingReturnContext = null;
+    if (
+      !jobDetailPanel.hidden
+      && jobDetailPanel.dataset.jobId === jobId
+    ) {
+      focusRequirementAction(requirementId, "add-achievement");
+    }
   }
 }
 

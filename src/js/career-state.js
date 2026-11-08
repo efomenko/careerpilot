@@ -10,6 +10,7 @@ import {
 } from "./achievement-model.js";
 import { validateJobRecord } from "./job-model.js";
 import { validateRequirementRecord } from "./requirement-model.js";
+import { validateAchievementMappingRecord } from "./achievement-mapping-model.js";
 
 function copyProfile(profile) {
   return profile ? { ...profile, skills: [...profile.skills] } : null;
@@ -575,11 +576,18 @@ function assertEditableInput(input, reservedFields, recordName) {
  * - updateRequirement(id, updates): partially update a Requirement while
  *   preserving its ID, Job, and creation timestamp.
  * - deleteRequirement(id): remove a Requirement and its achievement mappings.
+ * - createAchievementMapping(record): add a mapping for an existing Requirement
+ *   and Achievement, rejecting duplicate IDs and Requirement-Achievement pairs.
+ * - deleteAchievementMapping(id): remove a mapping by ID.
  * - getProfile(): return a safe profile copy, or null when absent.
  * - getEmploymentRecords(): return a new array containing safe record copies.
  * - getAchievementRecords(): return a new array containing safe record copies.
  * - getJobs(): return a new array containing safe Job copies.
  * - getRequirements(jobId): return safe Requirement copies in insertion order.
+ * - getAchievementMappingsForRequirement(requirementId): return safe mapping
+ *   copies in insertion order.
+ * - getAchievementMappingsForAchievement(achievementId): return safe mapping
+ *   copies in insertion order.
  *
  * Invalid records throw TypeError; unknown IDs and duplicate IDs throw Error.
  * No browser APIs, persistence, clock, or ID generation are used.
@@ -849,7 +857,15 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
         throw new Error(`Achievement record "${id}" does not exist.`);
       }
 
-      achievementRecords.splice(recordIndex, 1);
+      const remainingAchievements = achievementRecords.filter(
+        (record) => record.id !== id
+      );
+      const remainingMappings = achievementMappings.filter(
+        (mapping) => mapping.achievementId !== id
+      );
+
+      achievementRecords = remainingAchievements;
+      achievementMappings = remainingMappings;
       notifyMutation();
     },
 
@@ -1112,6 +1128,59 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       notifyMutation();
     },
 
+    createAchievementMapping(record) {
+      const result = validateAchievementMappingRecord(record);
+      if (!result.valid) {
+        throwJobValidationError("Achievement Mapping record", result.errors);
+      }
+      if (!requirements.some((requirement) => requirement.id === record.requirementId)) {
+        throw createJobStateError(
+          "NOT_FOUND",
+          `Requirement "${record.requirementId}" does not exist.`
+        );
+      }
+      if (!achievementRecords.some((achievement) => achievement.id === record.achievementId)) {
+        throw createJobStateError(
+          "NOT_FOUND",
+          `Achievement "${record.achievementId}" does not exist.`
+        );
+      }
+      if (achievementMappings.some((mapping) => mapping.id === record.id)) {
+        throw createJobStateError(
+          "DUPLICATE_ID",
+          `An Achievement Mapping with ID "${record.id}" already exists.`
+        );
+      }
+      if (achievementMappings.some((mapping) =>
+        mapping.requirementId === record.requirementId
+        && mapping.achievementId === record.achievementId
+      )) {
+        throw createJobStateError(
+          "DUPLICATE_PAIR",
+          `Requirement "${record.requirementId}" is already mapped to Achievement "${record.achievementId}".`
+        );
+      }
+
+      const newMapping = { ...record };
+      achievementMappings.push(newMapping);
+      const createdMapping = { ...newMapping };
+      notifyMutation();
+      return createdMapping;
+    },
+
+    deleteAchievementMapping(id) {
+      const mappingIndex = achievementMappings.findIndex((mapping) => mapping.id === id);
+      if (mappingIndex === -1) {
+        throw createJobStateError(
+          "NOT_FOUND",
+          `Achievement Mapping "${id}" does not exist.`
+        );
+      }
+
+      achievementMappings.splice(mappingIndex, 1);
+      notifyMutation();
+    },
+
     getProfile() {
       return copyProfile(profile);
     },
@@ -1132,6 +1201,18 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       return requirements
         .filter((requirement) => requirement.jobId === jobId)
         .map((requirement) => ({ ...requirement }));
+    },
+
+    getAchievementMappingsForRequirement(requirementId) {
+      return achievementMappings
+        .filter((mapping) => mapping.requirementId === requirementId)
+        .map((mapping) => ({ ...mapping }));
+    },
+
+    getAchievementMappingsForAchievement(achievementId) {
+      return achievementMappings
+        .filter((mapping) => mapping.achievementId === achievementId)
+        .map((mapping) => ({ ...mapping }));
     }
   };
 
