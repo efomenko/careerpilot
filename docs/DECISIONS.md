@@ -275,18 +275,31 @@ metric basis, or draft approval as verification.
 
 ### DEC-008 — Use transparent deterministic job-fit scoring
 
-**Status:** Confirmed in principle; formula open
+**Status:** Confirmed and implemented
 
-**Decision:** The initial job-fit assessment must use documented, reproducible rules rather than an opaque AI-generated judgment.
+**Decision:** The Fit Assessment uses documented, reproducible rules rather than an opaque AI-generated judgment:
 
-**Open questions:**
+- Mandatory Requirements have weight 2; Preferred Requirements have weight 1.
+- A Requirement is supported when at least one mapped Achievement has
+  `verificationStatus === "verified"`. `unverified` and
+  `needs_confirmation` evidence does not support a Requirement. Multiple
+  verified Achievements supporting one Requirement count only once.
+- The overall score is the percentage of weighted Requirements supported by
+  verified evidence. Mandatory Requirement coverage is calculated and
+  displayed separately.
+- With no Requirements, the assessment is `not_assessed` and its score is
+  `null`. With Requirements and no verified evidence, it is `assessed` with a
+  score of 0.
+- Scores retain full precision internally and display to one decimal place.
+- Assessments are derived dynamically from current source records and are not
+  persisted or cached.
+- The assessment describes documented evidence coverage only. It does not use
+  qualitative fit bands, predict hiring outcomes, or claim to measure hiring
+  success.
 
-- Which weights apply to mandatory and preferred requirements?
-- How should partial evidence be represented?
-- How should unverified evidence affect scoring?
-- Should missing mandatory requirements impose a cap or separate warning?
-
-**Next step:** Define and test the formula during CP-023 and CP-024.
+**Rationale:** Users can see which documented, verified evidence supports each
+Requirement and how Requirement importance affects the result without
+mistaking the score for a hiring prediction.
 
 ### DEC-009 — Separate verification from approval
 

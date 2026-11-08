@@ -176,6 +176,17 @@ const jobDetailSourceUrl = document.querySelector("#job-detail-source-url");
 const jobDetailNotes = document.querySelector("#job-detail-notes");
 const jobDetailCreated = document.querySelector("#job-detail-created");
 const jobDetailUpdated = document.querySelector("#job-detail-updated");
+const jobFitAssessmentStatus = document.querySelector("#job-fit-assessment-status");
+const jobFitAssessmentSummary = document.querySelector("#job-fit-assessment-summary");
+const jobFitAssessmentScore = document.querySelector("#job-fit-assessment-score");
+const jobFitAssessmentRequirements = document.querySelector(
+  "#job-fit-assessment-requirements"
+);
+const jobFitAssessmentMandatory = document.querySelector(
+  "#job-fit-assessment-mandatory"
+);
+const jobFitAssessmentEmpty = document.querySelector("#job-fit-assessment-empty");
+const jobFitAssessmentResults = document.querySelector("#job-fit-assessment-results");
 const jobRequirementsList = document.querySelector("#job-requirements-list");
 const jobRequirementsEmpty = document.querySelector("#job-requirements-empty");
 const requirementAddAction = document.querySelector("#requirement-add-action");
@@ -1007,7 +1018,124 @@ function renderAchievementEvidenceGroup(requirementId, jobId, label, group) {
   return section;
 }
 
-function renderJobRequirements(jobId) {
+function renderFitEvidenceGroup(label, achievementIds, achievementsById, className) {
+  if (achievementIds.length === 0) {
+    return null;
+  }
+
+  const section = document.createElement("section");
+  section.className = `job-fit-assessment__evidence ${className}`;
+  const heading = document.createElement("h5");
+  heading.className = "job-fit-assessment__evidence-heading";
+  heading.textContent = label;
+
+  const list = document.createElement("ul");
+  list.className = "job-fit-assessment__evidence-list";
+  achievementIds.forEach((achievementId) => {
+    const item = document.createElement("li");
+    const achievement = achievementsById.get(achievementId);
+    item.textContent = achievement
+      ? achievement.title
+      : "Achievement record unavailable.";
+    list.append(item);
+  });
+
+  section.append(heading, list);
+  return section;
+}
+
+function renderJobFitAssessment(jobId) {
+  try {
+    const assessment = careerState.calculateJobFitAssessment(jobId);
+    const requirementsById = new Map(
+      careerState.getRequirements(jobId).map((record) => [record.id, record])
+    );
+    const achievementsById = new Map(
+      careerState.getAchievementRecords().map((record) => [record.id, record])
+    );
+
+    jobFitAssessmentResults.replaceChildren();
+    jobFitAssessmentEmpty.hidden = assessment.status !== "not_assessed";
+    jobFitAssessmentSummary.hidden = assessment.status !== "assessed";
+    jobFitAssessmentResults.hidden = assessment.status !== "assessed";
+
+    if (assessment.status === "not_assessed") {
+      jobFitAssessmentStatus.textContent = "Not assessed";
+      jobFitAssessmentEmpty.textContent = "No Requirements are available to assess.";
+      return;
+    }
+
+    jobFitAssessmentStatus.textContent = "Assessed";
+    jobFitAssessmentScore.textContent = `${assessment.score.toFixed(1)}%`;
+    jobFitAssessmentRequirements.textContent =
+      `${assessment.supportedRequirementCount} of ${assessment.totalRequirementCount}`;
+    jobFitAssessmentMandatory.textContent = assessment.totalMandatoryCount === 0
+      ? "No mandatory requirements"
+      : `${assessment.supportedMandatoryCount} of ${assessment.totalMandatoryCount}`;
+
+    assessment.requirementResults.forEach((result) => {
+      const item = document.createElement("li");
+      item.className = "job-fit-assessment__result";
+
+      const heading = document.createElement("h4");
+      heading.className = "job-fit-assessment__requirement";
+      heading.textContent = requirementsById.get(result.requirementId)?.description
+        ?? "Requirement description unavailable.";
+
+      const status = document.createElement("p");
+      status.className = "job-fit-assessment__result-status";
+      const supportLabel = result.status === "supported" ? "Supported" : "Unsupported";
+      const importanceLabel = result.importance === "mandatory"
+        ? "Mandatory"
+        : "Preferred";
+      status.textContent = `${supportLabel} · ${importanceLabel} · ${formatRequirementCategory(result.category)}`;
+
+      const evidence = document.createElement("div");
+      evidence.className = "job-fit-assessment__evidence-groups";
+      const verifiedGroup = renderFitEvidenceGroup(
+        "Verified evidence (supports this Requirement)",
+        result.verifiedAchievementIds,
+        achievementsById,
+        "job-fit-assessment__evidence--verified"
+      );
+      const unverifiedGroup = renderFitEvidenceGroup(
+        "Unverified evidence (does not support this Requirement)",
+        result.unverifiedAchievementIds,
+        achievementsById,
+        "job-fit-assessment__evidence--unverified"
+      );
+
+      if (verifiedGroup) {
+        evidence.append(verifiedGroup);
+      }
+      if (unverifiedGroup) {
+        evidence.append(unverifiedGroup);
+      }
+      if (!verifiedGroup && !unverifiedGroup) {
+        const empty = document.createElement("p");
+        empty.className = "job-fit-assessment__no-evidence";
+        empty.textContent = "No mapped Achievement evidence.";
+        evidence.append(empty);
+      }
+
+      item.append(heading, status, evidence);
+      jobFitAssessmentResults.append(item);
+    });
+  } catch (error) {
+    jobFitAssessmentStatus.textContent = "Assessment unavailable";
+    jobFitAssessmentSummary.hidden = true;
+    jobFitAssessmentEmpty.hidden = false;
+    jobFitAssessmentResults.hidden = true;
+    jobFitAssessmentEmpty.textContent = "The Fit Assessment could not be calculated.";
+    jobFitAssessmentResults.replaceChildren();
+    notifications.show(
+      "error",
+      error.message || "The Fit Assessment could not be calculated."
+    );
+  }
+}
+
+function renderJobRequirements(jobId, { refreshAssessment = true } = {}) {
   const records = careerState.getRequirements(jobId);
   const achievements = careerState.getAchievementRecords();
   jobRequirementsList.replaceChildren();
@@ -1105,6 +1233,10 @@ function renderJobRequirements(jobId) {
     article.append(description, details, evidenceSection, actions);
     jobRequirementsList.append(article);
   });
+
+  if (refreshAssessment) {
+    renderJobFitAssessment(jobId);
+  }
 }
 
 function focusRequirementAction(requirementId, action = "edit") {
@@ -1391,7 +1523,7 @@ function confirmRequirementDeletion() {
   notifications.show("success", "Requirement deleted.");
 }
 
-function renderJobDetail(record) {
+function renderJobDetail(record, { refreshAssessment = true } = {}) {
   jobDetailPanel.dataset.jobId = record.id;
   jobDetailTitle.textContent = record.roleTitle;
   jobDetailCompany.textContent = record.company;
@@ -1407,7 +1539,7 @@ function renderJobDetail(record) {
   jobArchiveAction.textContent = record.status === "archived"
     ? "Reactivate"
     : "Archive";
-  renderJobRequirements(record.id);
+  renderJobRequirements(record.id, { refreshAssessment });
 }
 
 function openJobDetail(jobId) {
@@ -1666,7 +1798,7 @@ function saveJob(event) {
         const updatedRecord = careerState.getJobs()
           .find((item) => item.id === existingJob.id);
         if (updatedRecord) {
-          renderJobDetail(updatedRecord);
+          renderJobDetail(updatedRecord, { refreshAssessment: false });
         }
       }
     } else {

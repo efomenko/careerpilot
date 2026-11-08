@@ -381,17 +381,47 @@ the complete Achievement deletion confirmation checklist passed.
 
 ### CP-023 and CP-024 — Scoring
 
-- Test a job with all requirements supported.
-- Test partial coverage.
-- Test no supporting evidence.
-- Test mandatory requirements without evidence.
-- Test unverified evidence.
-- Test conflicting or duplicate mappings.
-- Confirm identical inputs produce identical results.
-- Confirm explanation and score agree.
-- Confirm the score is not described as a probability of being hired.
+#### Automated coverage
 
-Expected outputs must be documented after the scoring formula is agreed.
+- `tests/fit-assessment-helpers.test.js`: verify empty/not-assessed and zero-
+  and full-coverage results, weighted partial scores, Mandatory counts,
+  verified versus unverified and `needs_confirmation` classification,
+  multiple verified Achievements counting once, missing Achievement records,
+  Requirements without mappings, evidence ID order and deduplication,
+  four-group and deterministic secondary ordering, exact result fields,
+  input validation, repeated-call determinism, and input/output immutability.
+- `tests/career-state.test.js`: verify existing Job validation, live source
+  data gathered through public state APIs, verified-only support, isolation
+  between Jobs sharing an Achievement, and fresh results after mapping
+  creation/deletion, verification changes, content edits that reset
+  verification, and Requirement importance updates. Verify failed mutations
+  preserve assessment results, calculation does not notify subscribers or
+  mutate source records, and snapshots do not contain `fitAssessments`.
+- `tests/career-persistence.test.js`: verify persisted snapshots do not
+  contain `fitAssessments`.
+- Full automated test suite: 341 passed, 0 failed.
+
+#### Manual browser regression — completed
+
+The user confirmed that CP-023 Fit Assessment browser QA passed. No browser
+version or test-environment details are recorded.
+
+- Verify Jobs with no Requirements show a not-assessed state without a score;
+  verify zero and partial evidence coverage.
+- Verify Mandatory/Preferred weighting, Mandatory coverage, and multiple
+  verified Achievements counting as support for one Requirement.
+- Verify verified evidence is distinguished from `unverified` and
+  `needs_confirmation` evidence, and that unverified evidence is not presented
+  as supporting a Requirement.
+- Create, edit, and delete Requirements; create and remove mappings; verify
+  the assessment refreshes.
+- Change Achievement verification, edit Achievement content so verification
+  resets, and delete an Achievement; verify the assessment refreshes.
+- Delete Employment History linked to verified Achievements; verify the
+  resulting verification reset is reflected in the assessment.
+- Navigate away from the Job detail and back to Jobs; verify the selected
+  Job's assessment reflects current data.
+- Verify responsive layout and keyboard/accessibility behavior.
 
 ## 7. M4 — Application Drafts & Review
 

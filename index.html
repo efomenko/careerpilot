@@ -869,6 +869,43 @@
               </div>
             </dl>
 
+            <section
+              class="job-fit-assessment"
+              aria-labelledby="job-fit-assessment-title"
+            >
+              <h3 id="job-fit-assessment-title">Fit Assessment</h3>
+              <p
+                class="job-fit-assessment__status"
+                id="job-fit-assessment-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+              <dl class="job-fit-assessment__summary" id="job-fit-assessment-summary">
+                <div>
+                  <dt>Overall score (documented evidence coverage)</dt>
+                  <dd id="job-fit-assessment-score"></dd>
+                </div>
+                <div>
+                  <dt>Supported Requirements</dt>
+                  <dd id="job-fit-assessment-requirements"></dd>
+                </div>
+                <div>
+                  <dt>Mandatory Requirements</dt>
+                  <dd id="job-fit-assessment-mandatory"></dd>
+                </div>
+              </dl>
+              <p
+                class="job-fit-assessment__empty"
+                id="job-fit-assessment-empty"
+                hidden
+              ></p>
+              <ol
+                class="job-fit-assessment__results"
+                id="job-fit-assessment-results"
+                aria-label="Fit Assessment Requirement results"
+              ></ol>
+            </section>
+
             <section class="job-requirements" aria-labelledby="job-requirements-title">
               <div class="job-requirements__heading">
                 <h3 id="job-requirements-title">Requirements</h3>

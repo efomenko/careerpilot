@@ -838,6 +838,252 @@ test("lists mappings by either endpoint in insertion order with detached copies"
   assert.deepEqual(notifications, []);
 });
 
+test("calculates not_assessed for an existing Job with no Requirements", () => {
+  const state = createCareerState();
+  state.createJob(completeJob("job-1"));
+
+  assert.deepEqual(state.calculateJobFitAssessment("job-1"), {
+    jobId: "job-1",
+    status: "not_assessed",
+    score: null,
+    supportedRequirementCount: 0,
+    totalRequirementCount: 0,
+    supportedMandatoryCount: 0,
+    totalMandatoryCount: 0,
+    requirementResults: []
+  });
+  assert.equal("fitAssessments" in state.getSnapshot(), false);
+});
+
+test("calculates a Job assessment from current public state reads", () => {
+  const state = createCareerState();
+  state.restoreSnapshot(completeSnapshot({
+    jobs: [completeJob("job-1"), completeJob("job-2")],
+    requirements: [
+      completeRequirement("mandatory-supported", "job-1"),
+      completeRequirement("preferred-unverified", "job-1", {
+        importance: "preferred"
+      }),
+      completeRequirement("mandatory-unsupported", "job-1", {
+        createdAt: updatedAt,
+        updatedAt
+      }),
+      completeRequirement("other-job-requirement", "job-2")
+    ],
+    achievementRecords: [
+      completeAchievement("verified-1", { verificationStatus: "verified" }),
+      completeAchievement("verified-2", { verificationStatus: "verified" }),
+      completeAchievement("unverified", { verificationStatus: "unverified" }),
+      completeAchievement("needs-confirmation", {
+        verificationStatus: "needs_confirmation"
+      })
+    ],
+    achievementMappings: [
+      completeAchievementMapping("mapping-1", "mandatory-supported", "verified-1"),
+      completeAchievementMapping("mapping-2", "mandatory-supported", "verified-2"),
+      completeAchievementMapping("mapping-3", "mandatory-supported", "unverified"),
+      completeAchievementMapping(
+        "mapping-4",
+        "preferred-unverified",
+        "needs-confirmation"
+      ),
+      completeAchievementMapping("mapping-5", "other-job-requirement", "verified-1")
+    ]
+  }));
+
+  const calls = [];
+  const getJobs = state.getJobs.bind(state);
+  const getRequirements = state.getRequirements.bind(state);
+  const getAchievementMappingsForRequirement =
+    state.getAchievementMappingsForRequirement.bind(state);
+  const getAchievementRecords = state.getAchievementRecords.bind(state);
+  state.getJobs = (...args) => {
+    calls.push(["getJobs", ...args]);
+    return getJobs(...args);
+  };
+  state.getRequirements = (...args) => {
+    calls.push(["getRequirements", ...args]);
+    return getRequirements(...args);
+  };
+  state.getAchievementMappingsForRequirement = (...args) => {
+    calls.push(["getAchievementMappingsForRequirement", ...args]);
+    return getAchievementMappingsForRequirement(...args);
+  };
+  state.getAchievementRecords = (...args) => {
+    calls.push(["getAchievementRecords", ...args]);
+    return getAchievementRecords(...args);
+  };
+
+  const assessment = state.calculateJobFitAssessment("job-1");
+
+  assert.equal(assessment.score, 40);
+  assert.equal(assessment.supportedRequirementCount, 1);
+  assert.equal(assessment.totalRequirementCount, 3);
+  assert.equal(assessment.supportedMandatoryCount, 1);
+  assert.equal(assessment.totalMandatoryCount, 2);
+  assert.deepEqual(
+    assessment.requirementResults.map(({ requirementId }) => requirementId),
+    ["mandatory-unsupported", "preferred-unverified", "mandatory-supported"]
+  );
+  assert.deepEqual(
+    assessment.requirementResults[2].verifiedAchievementIds,
+    ["verified-1", "verified-2"]
+  );
+  assert.deepEqual(
+    assessment.requirementResults[2].unverifiedAchievementIds,
+    ["unverified"]
+  );
+  assert.deepEqual(
+    assessment.requirementResults[1].unverifiedAchievementIds,
+    ["needs-confirmation"]
+  );
+  assert.deepEqual(calls, [
+    ["getJobs"],
+    ["getRequirements", "job-1"],
+    ["getAchievementMappingsForRequirement", "mandatory-supported"],
+    ["getAchievementMappingsForRequirement", "preferred-unverified"],
+    ["getAchievementMappingsForRequirement", "mandatory-unsupported"],
+    ["getAchievementRecords"]
+  ]);
+});
+
+test("rejects unknown, invalid, and blank Job IDs with the established NOT_FOUND error", () => {
+  const state = createCareerState();
+  state.createJob(completeJob("job-1"));
+
+  for (const jobId of ["missing", "", " \t ", null, 1]) {
+    assert.throws(
+      () => state.calculateJobFitAssessment(jobId),
+      (error) => error.code === "NOT_FOUND"
+        && error.message === `Job "${jobId}" does not exist.`
+    );
+  }
+});
+
+test("recalculates current assessment after mapping, verification, content, and importance changes", () => {
+  const notifications = [];
+  const state = createCareerState({
+    onMutation(getSnapshot) {
+      notifications.push(getSnapshot());
+    }
+  });
+  state.createJob(completeJob("job-1"));
+  state.createRequirement(completeRequirement("requirement-1", "job-1"));
+  state.createRequirement(completeRequirement("requirement-2", "job-1", {
+    createdAt: updatedAt,
+    updatedAt
+  }));
+  addAchievement(state, "achievement-1");
+  notifications.length = 0;
+
+  const calculate = () => state.calculateJobFitAssessment("job-1");
+  assert.equal(calculate().score, 0);
+
+  state.createAchievementMapping(completeAchievementMapping(
+    "mapping-1",
+    "requirement-1",
+    "achievement-1"
+  ));
+  assert.equal(calculate().score, 0);
+
+  state.updateAchievementVerificationStatus(
+    "achievement-1",
+    "verified",
+    updatedAt
+  );
+  assert.equal(calculate().score, 50);
+
+  state.updateAchievementRecord(
+    "achievement-1",
+    achievementInput({ title: "Updated achievement" }),
+    "2025-06-01T00:00:00.000Z"
+  );
+  assert.equal(state.getAchievementRecords()[0].verificationStatus, "unverified");
+  assert.equal(calculate().score, 0);
+
+  state.updateRequirement("requirement-1", {
+    importance: "preferred",
+    updatedAt: "2025-06-02T00:00:00.000Z"
+  });
+  assert.equal(calculate().score, 0);
+
+  state.updateAchievementVerificationStatus(
+    "achievement-1",
+    "verified",
+    "2025-06-03T00:00:00.000Z"
+  );
+  assert.equal(calculate().score, (1 / 3) * 100);
+
+  state.deleteAchievementMapping("mapping-1");
+  assert.equal(calculate().score, 0);
+  assert.equal("fitAssessments" in state.getSnapshot(), false);
+  assert.equal(notifications.length, 6);
+});
+
+test("failed mutations leave calculated assessment unchanged", () => {
+  const state = createCareerState();
+  state.createJob(completeJob("job-1"));
+  state.createRequirement(completeRequirement("requirement-1", "job-1"));
+  addAchievement(state, "achievement-1");
+  state.updateAchievementVerificationStatus("achievement-1", "verified", updatedAt);
+  state.createAchievementMapping(completeAchievementMapping(
+    "mapping-1",
+    "requirement-1",
+    "achievement-1"
+  ));
+  const before = state.calculateJobFitAssessment("job-1");
+
+  assert.throws(
+    () => state.updateRequirement("requirement-1", {
+      importance: "optional",
+      updatedAt
+    }),
+    (error) => error.code === "VALIDATION_ERROR"
+  );
+  assert.throws(
+    () => state.createAchievementMapping(completeAchievementMapping(
+      "duplicate-mapping",
+      "requirement-1",
+      "achievement-1"
+    )),
+    (error) => error.code === "DUPLICATE_PAIR"
+  );
+  assert.deepEqual(state.calculateJobFitAssessment("job-1"), before);
+});
+
+test("assessment reads and returned results do not mutate source state", () => {
+  const state = createCareerState();
+  state.restoreSnapshot(completeSnapshot({
+    jobs: [completeJob("job-1")],
+    requirements: [completeRequirement("requirement-1", "job-1")],
+    achievementRecords: [
+      completeAchievement("achievement-1", { verificationStatus: "verified" })
+    ],
+    achievementMappings: [
+      completeAchievementMapping("mapping-1", "requirement-1", "achievement-1")
+    ]
+  }));
+  const snapshotBeforeCalculation = state.getSnapshot();
+
+  const assessment = state.calculateJobFitAssessment("job-1");
+  assessment.requirementResults[0].verifiedAchievementIds.push("injected");
+  assessment.requirementResults.push({
+    requirementId: "injected",
+    status: "supported",
+    importance: "mandatory",
+    category: "skill",
+    verifiedAchievementIds: [],
+    unverifiedAchievementIds: []
+  });
+
+  assert.deepEqual(state.getSnapshot(), snapshotBeforeCalculation);
+  assert.equal("fitAssessments" in state.getSnapshot(), false);
+  assert.equal(
+    state.calculateJobFitAssessment("job-1").requirementResults.length,
+    1
+  );
+});
+
 test("deletes mappings once without modifying endpoints and rejects missing IDs", () => {
   const notifications = [];
   const state = createCareerState({

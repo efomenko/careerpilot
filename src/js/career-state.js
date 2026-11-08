@@ -11,6 +11,7 @@ import {
 import { validateJobRecord } from "./job-model.js";
 import { validateRequirementRecord } from "./requirement-model.js";
 import { validateAchievementMappingRecord } from "./achievement-mapping-model.js";
+import { calculateJobFitAssessment as calculateFitAssessment } from "./fit-assessment-helpers.js";
 
 function copyProfile(profile) {
   return profile ? { ...profile, skills: [...profile.skills] } : null;
@@ -584,6 +585,8 @@ function assertEditableInput(input, reservedFields, recordName) {
  * - getAchievementRecords(): return a new array containing safe record copies.
  * - getJobs(): return a new array containing safe Job copies.
  * - getRequirements(jobId): return safe Requirement copies in insertion order.
+ * - calculateJobFitAssessment(jobId): calculate a fresh assessment from
+ *   current Requirements, mappings, and Achievements for an existing Job.
  * - getAchievementMappingsForRequirement(requirementId): return safe mapping
  *   copies in insertion order.
  * - getAchievementMappingsForAchievement(achievementId): return safe mapping
@@ -1201,6 +1204,29 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       return requirements
         .filter((requirement) => requirement.jobId === jobId)
         .map((requirement) => ({ ...requirement }));
+    },
+
+    calculateJobFitAssessment(jobId) {
+      if (
+        typeof jobId !== "string"
+        || jobId.trim() === ""
+        || !state.getJobs().some((job) => job.id === jobId)
+      ) {
+        throw createJobStateError("NOT_FOUND", `Job "${jobId}" does not exist.`);
+      }
+
+      const jobRequirements = state.getRequirements(jobId);
+      const mappings = jobRequirements.flatMap((requirement) =>
+        state.getAchievementMappingsForRequirement(requirement.id)
+      );
+      const achievementRecords = state.getAchievementRecords();
+
+      return calculateFitAssessment(
+        jobId,
+        jobRequirements,
+        mappings,
+        achievementRecords
+      );
     },
 
     getAchievementMappingsForRequirement(requirementId) {

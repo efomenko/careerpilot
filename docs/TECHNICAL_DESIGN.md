@@ -570,22 +570,54 @@ migration paths.
 
 ## 11. Job-Fit Assessment
 
-The assessment should be deterministic and explainable.
+`src/js/fit-assessment-helpers.js` exports the pure
+`calculateJobFitAssessment(jobId, requirements, mappings, achievementRecords)`
+calculation. The state-aware `calculateJobFitAssessment(jobId)` API in
+`src/js/career-state.js` verifies the Job and gathers its current Requirements,
+their Achievement Mappings, and current Achievement records through state read
+APIs before calling the helper.
 
-A possible conceptual calculation is:
+Assessments are derived data, calculated on demand from Jobs, Requirements,
+Achievement records, Achievement Mappings, and current verification statuses.
+They are not cached or stored in state or the persistence schema.
 
-**Weighted coverage = sum of the weights of supported requirements divided by the sum of all applicable requirement weights.**
+A Requirement is supported if at least one mapped Achievement has
+`verificationStatus === "verified"`. `unverified` and
+`needs_confirmation` Achievements are listed as evidence but do not support
+the Requirement. Multiple verified Achievements for one Requirement count as
+one supported Requirement; mappings to missing Achievement records are
+ignored. Mandatory Requirements have weight 2 and Preferred Requirements
+weight 1. The overall score is the percentage of total Requirement weight
+supported by verified evidence. Mandatory coverage is calculated and
+displayed separately. An assessment with no Requirements is `not_assessed`
+with a null score; Requirements with no verified support produce an
+`assessed` score of 0. The calculation retains full precision, and the UI
+displays the score to one decimal place. With no Mandatory Requirements, the
+UI displays No mandatory requirements.
 
-This formula is illustrative. The exact treatment of partially supported, unverified, missing, and mandatory requirements must be decided before implementation.
+Requirement results are grouped and ordered as follows:
 
-The UI should explain:
+1. Unsupported Mandatory
+2. Unsupported Preferred
+3. Supported Mandatory
+4. Supported Preferred
 
-- Which requirements are supported.
-- Which records support them.
-- Which requirements are missing or uncertain.
-- How weights influence the result.
+Within each group, results sort by Requirement creation date ascending, then
+Requirement ID ascending. Each result includes separate verified and
+unverified Achievement ID lists; result objects expose the Requirement's
+`category`.
 
-The score must not be presented as a probability of receiving an interview or job offer.
+The Job detail UI displays assessment status, score, supported Requirement
+counts, mandatory coverage, and the ordered per-Requirement results, resolving
+current Requirement descriptions and Achievement titles. Verified and
+unverified evidence are explicitly distinguished; missing Achievement or
+Requirement records are handled with fallback text. Existing Requirement,
+mapping, Achievement, and employment-related refresh paths recalculate the
+assessment from current state instead of using cached values.
+
+The assessment measures documented evidence coverage only. It must not be
+presented through qualitative fit bands, as a hiring prediction, or as a
+measure of hiring success.
 
 ## 12. Draft Generation
 
