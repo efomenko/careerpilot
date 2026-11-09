@@ -1,9 +1,9 @@
 import {
-  isJsonCompatibleProvenance,
   validateCareerProfile,
   validateEmploymentRecord
 } from "./career-model.js";
 import { validateAchievementRecord } from "./achievement-model.js";
+import { addProvenanceErrors } from "./provenance-model.js";
 import { validateJobRecord } from "./job-model.js";
 import { validateRequirementRecord } from "./requirement-model.js";
 
@@ -735,12 +735,9 @@ function stripV4Provenance(record) {
 }
 
 function validateProvenance(record) {
-  if (Object.hasOwn(record, "provenance")
-    && record.provenance !== null
-    && (!Array.isArray(record.provenance) || !isJsonCompatibleProvenance(record.provenance))) {
-    return [{ field: "provenance", message: "Must be null or a JSON-compatible array." }];
-  }
-  return [];
+  const errors = [];
+  addProvenanceErrors(record, errors);
+  return errors;
 }
 
 function validateWithProvenance(record, validator) {

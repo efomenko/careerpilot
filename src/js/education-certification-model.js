@@ -1,4 +1,5 @@
-import { dateInterval, isJsonCompatibleProvenance, isUtcTimestamp } from "./career-model.js";
+import { dateInterval, isUtcTimestamp } from "./career-model.js";
+import { addProvenanceErrors, copyProvenance } from "./provenance-model.js";
 
 function isObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -56,10 +57,7 @@ function validateFields(value, spec, errors, warnings) {
     }
   }
 
-  if (Object.hasOwn(value, "provenance") && value.provenance !== null
-    && (!Array.isArray(value.provenance) || !isJsonCompatibleProvenance(value.provenance))) {
-    errors.push({ field: "provenance", message: "This field must be null or a JSON-compatible array." });
-  }
+  addProvenanceErrors(value, errors);
 
   if (spec.current) {
     if (!Object.hasOwn(value, "isCurrent")) {
@@ -156,7 +154,7 @@ export function createRecord(input, metadata, spec) {
     if (spec.dates.includes(field)) {
       record[field] = value === null ? null : { ...value };
     } else if (field === "provenance") {
-      record[field] = value === null ? null : [...value];
+      record[field] = copyProvenance(value);
     } else {
       record[field] = value;
     }

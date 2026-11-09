@@ -1,4 +1,4 @@
-import { isJsonCompatibleProvenance } from "./career-model.js";
+import { addProvenanceErrors, copyProvenance } from "./provenance-model.js";
 
 // Provenance may be absent, null, or an array; constructors default omissions to [].
 const achievementInputFields = [
@@ -247,10 +247,7 @@ function validateAchievementFields(value, errors) {
 
   addEmploymentIdErrors(value, errors, true);
 
-  if (Object.hasOwn(value, "provenance") && value.provenance !== null
-    && (!Array.isArray(value.provenance) || !isJsonCompatibleProvenance(value.provenance))) {
-    errors.push({ field: "provenance", message: "This field must be null or a JSON-compatible array." });
-  }
+  addProvenanceErrors(value, errors);
 
   if (!Object.hasOwn(value, "verificationStatus")) {
     errors.push({
@@ -319,10 +316,7 @@ function addInputErrors(input) {
     errors.push({ field: "evidence", message: "This field must be an array." });
   }
 
-  if (Object.hasOwn(input, "provenance") && input.provenance !== null
-    && (!Array.isArray(input.provenance) || !isJsonCompatibleProvenance(input.provenance))) {
-    errors.push({ field: "provenance", message: "This field must be null or a JSON-compatible array." });
-  }
+  addProvenanceErrors(input, errors);
 
   addEmploymentIdErrors(input, errors, false);
   return errors;
@@ -377,7 +371,7 @@ export function createAchievementRecord(input, metadata) {
     actions: [...record.actions],
     metrics: record.metrics.map((metric) => ({ ...metric })),
     evidence: [...record.evidence],
-    provenance: record.provenance === null ? null : [...record.provenance]
+    provenance: copyProvenance(record.provenance)
   };
 }
 

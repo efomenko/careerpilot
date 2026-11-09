@@ -967,6 +967,23 @@ must not be orphaned when a career record is deleted. Stable field paths and
 stable item IDs are required; permanent array-index references are not.
 Provenance does not verify claims and does not replace Achievement evidence.
 
+The standalone Provenance model requires a non-blank ID, source-document ID,
+field path, excerpt, and creation timestamp. `sourceType` is `cv`;
+`associationStatus` uses the values above; and `language` is `en` or `ru` for
+the initial supported languages. `extractedValue` may be any JSON-compatible
+value and is copied when a record is constructed. A supplied `page` is a
+positive safe integer. Field paths are non-blank and must not encode numeric
+array indexes. Excerpts must be non-blank and no longer than 500 Unicode code
+points.
+
+Profile, Employment, Achievement, Education, and Certification model
+validators check each supplied provenance item against this contract.
+Omitted or null provenance remains accepted where previously supported.
+Stored Profile, Employment, and Achievement provenance that does not meet the
+contract is protected as invalid rather than silently discarded or overwritten.
+Education and Certification snapshot collections remain validated at the
+container level until their state and persistence integration is implemented.
+
 Employment `startDate` and `endDate` use the structured date form:
 
 ```js

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { provenanceItem } from "./provenance-fixture.js";
 import { createCareerStorage } from "../src/js/career-storage.js";
 import { createCareerState } from "../src/js/career-state.js";
 import { createCareerPersistence } from "../src/js/career-persistence.js";
@@ -589,7 +590,7 @@ test("rejects v3 Employment dates with year 0000 without replacing stored data",
 });
 
 test("historical migrations preserve supplied provenance and default missing provenance", () => {
-  for (const provenance of [null, [], [{ excerpt: "source" }]]) {
+  for (const provenance of [null, [], [provenanceItem()]]) {
     const data = v3Snapshot();
     data.profile.provenance = provenance;
     data.employmentRecords[0].provenance = provenance;
@@ -604,6 +605,67 @@ test("historical migrations preserve supplied provenance and default missing pro
   }
   const missing = createCareerStorage(createFakeStorage(storedV3())).load();
   assert.deepEqual(missing.snapshot.profile.provenance, []);
+});
+
+test("incomplete provenance in historical and v4 snapshots is protected without partial hydration", () => {
+  for (const [version, data] of [[1, v1Snapshot()], [2, v2Snapshot()], [3, v3Snapshot()], [4, snapshot()]]) {
+    data.profile.provenance = [{ excerpt: "legacy source" }];
+    const raw = JSON.stringify({ version, ...data });
+    const fake = createFakeStorage(raw);
+    const adapter = createCareerStorage(fake);
+    const loaded = adapter.load();
+    assert.equal(loaded.status, "corrupt", `version ${version}`);
+    assert.equal(loaded.writesDisabled, true);
+    assert.equal(fake.values.get(storageKey), raw);
+    assert.equal(adapter.save(snapshot()).status, "writes-disabled");
+    assert.equal(createCareerStorage(fake).save(snapshot()).status, "writes-disabled");
+    assert.deepEqual(fake.calls.setItem, []);
+
+    const persistence = createCareerPersistence(fake);
+    assert.equal(persistence.state.getProfile(), null);
+    assert.equal(persistence.getStatus().persistentWarning.kind, "corrupt");
+    assert.equal(fake.values.get(storageKey), raw);
+  }
+});
+
+test("pre-write recheck protects a snapshot containing incomplete provenance", () => {
+  const invalid = snapshot();
+  invalid.profile.provenance = [{ excerpt: "legacy source" }];
+  const protectedRaw = stored(invalid);
+  let raw = stored(snapshot());
+  let reads = 0;
+  let writes = 0;
+  const adapter = createCareerStorage({
+    getItem() {
+      reads += 1;
+      if (reads === 2) raw = protectedRaw;
+      return raw;
+    },
+    setItem(key, value) { writes += 1; raw = value; }
+  });
+  assert.equal(adapter.save(snapshot()).status, "writes-disabled");
+  assert.equal(raw, protectedRaw);
+  assert.equal(writes, 0);
+});
+
+test("provenance proxy reflection failures do not write or replace stored data", () => {
+  const raw = stored(snapshot());
+  for (const trap of ["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"]) {
+    for (const location of ["array", "item", "nested"]) {
+      const handler = { [trap]() { throw new Error(`${trap} failed`); } };
+      const data = snapshot();
+      const item = provenanceItem(location === "nested" ? { nested: new Proxy({ key: "value" }, handler) } : "source");
+      data.profile.provenance = location === "array"
+        ? new Proxy([item], handler)
+        : [location === "item" ? new Proxy(item, handler) : item];
+      const fake = createFakeStorage(raw);
+      const adapter = createCareerStorage(fake);
+      assert.notEqual(adapter.save(data).status, "saved", `${location}: ${trap}`);
+      assert.equal(fake.values.get(storageKey), raw);
+      assert.deepEqual(fake.calls.setItem, []);
+      assert.equal(adapter.save(snapshot()).status, "saved");
+    }
+  }
 });
 
 test("historical malformed dates and provenance return corrupt without throwing", () => {
@@ -650,7 +712,7 @@ test("v4 chronology uses known intervals without inventing unknown dates", () =>
 });
 
 test("v4 storage checks provenance types and rejects lossy opaque values", () => {
-  for (const provenance of [null, [], [{ excerpt: "source" }]]) {
+  for (const provenance of [null, [], [provenanceItem()]]) {
     const data = snapshot();
     data.profile.provenance = provenance;
     data.employmentRecords[0].provenance = provenance;

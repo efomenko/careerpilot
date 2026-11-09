@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { provenanceItem } from "./provenance-fixture.js";
 import { createAchievementMappingRecord } from "../src/js/achievement-mapping-model.js";
 import { createCareerState } from "../src/js/career-state.js";
 import { createCareerStorage } from "../src/js/career-storage.js";
@@ -177,16 +178,16 @@ test("initializes empty profile and record collections", () => {
 test("v4 snapshots round trip opaque collections, precision, and provenance without sharing references", () => {
   const state = createCareerState();
   const input = completeSnapshot({
-    profile: completeProfile({ provenance: [{ nested: ["profile"] }] }),
+    profile: completeProfile({ provenance: [provenanceItem({ nested: ["profile"] })] }),
     employmentRecords: [completeEmployment("employment-1", {
       startDate: { value: "2020", precision: "year" },
       endDate: { value: "2021-05", precision: "month" },
       isCurrent: false,
-      provenance: [{ nested: ["employment"] }]
+      provenance: [provenanceItem({ nested: ["employment"] })]
     })],
     achievementRecords: [completeAchievement("achievement-1", {
       employmentId: "employment-1",
-      provenance: [{ nested: ["achievement"] }]
+      provenance: [provenanceItem({ nested: ["achievement"] })]
     })],
     educationRecords: [{ nested: [{ value: "education" }] }, null],
     certificationRecords: [{ nested: [{ value: "certification" }] }],
@@ -202,17 +203,17 @@ test("v4 snapshots round trip opaque collections, precision, and provenance with
   assert.deepEqual(state.getSnapshot(), expected);
   input.educationRecords[0].nested[0].value = "changed";
   input.import.sessions[0].nested[0] = "changed";
-  input.profile.provenance[0].nested[0] = "changed";
+  input.profile.provenance[0].extractedValue.nested[0] = "changed";
 
   const exported = state.getSnapshot();
   exported.certificationRecords[0].nested[0].value = "changed";
   exported.import.completedBatches[0].nested[0] = "changed";
   exported.import.importReports[0].nested[0] = "changed";
   exported.employmentRecords[0].startDate.value = "1999";
-  exported.achievementRecords[0].provenance[0].nested[0] = "changed";
-  state.getProfile().provenance[0].nested[0] = "changed";
+  exported.achievementRecords[0].provenance[0].extractedValue.nested[0] = "changed";
+  state.getProfile().provenance[0].extractedValue.nested[0] = "changed";
   state.getEmploymentRecords()[0].endDate.value = "1999-01";
-  state.getAchievementRecords()[0].provenance[0].nested[0] = "changed";
+  state.getAchievementRecords()[0].provenance[0].extractedValue.nested[0] = "changed";
   assert.deepEqual(state.getSnapshot(), expected);
 
   state.updateProfile(profileInput({ fullName: "Updated" }), updatedAt);
@@ -262,7 +263,7 @@ test("v4 state snapshots save and load through the storage contract", () => {
 });
 
 test("v4 missing, null and array provenance loads and survives ordinary updates", () => {
-  for (const provenance of [undefined, null, [], [{ excerpt: "source" }]]) {
+  for (const provenance of [undefined, null, [], [provenanceItem()]]) {
     const snapshot = completeSnapshot();
     for (const record of [snapshot.profile, snapshot.employmentRecords[0], snapshot.achievementRecords[0]]) {
       if (provenance === undefined) {
@@ -296,7 +297,7 @@ test("v4 missing, null and array provenance loads and survives ordinary updates"
       }
     }
     assert.equal(storage.save(output).status, "saved");
-    const replacement = [{ excerpt: "replacement" }];
+    const replacement = [provenanceItem("replacement")];
     state.updateProfile(profileInput({ provenance: replacement }), updatedAt);
     state.updateEmploymentRecord("employment-1", employmentInput({ provenance: replacement }), updatedAt);
     state.updateAchievementRecord("achievement-1", achievementInput({ provenance: replacement }), updatedAt);
@@ -2485,16 +2486,16 @@ test("updates the profile while preserving its identity and creation time", () =
 
 test("profile updates preserve provenance unless explicitly replaced", () => {
   const state = createCareerState();
-  const provenance = [{ sources: ["cv", { excerpt: "original" }] }];
+  const provenance = [provenanceItem({ sources: ["cv", { excerpt: "original" }] })];
   state.createProfile(profileInput({ provenance }), { id: "profile-1", createdAt });
 
   const updated = state.updateProfile(profileInput({ fullName: "Updated name" }), updatedAt);
   assert.deepEqual(updated.provenance, provenance);
 
-  updated.provenance[0].sources[1].excerpt = "changed";
+  updated.provenance[0].extractedValue.sources[1].excerpt = "changed";
   assert.deepEqual(state.getProfile().provenance, provenance);
 
-  const replacement = [{ sources: ["updated source"] }];
+  const replacement = [provenanceItem({ sources: ["updated source"] })];
   const explicitlyUpdated = state.updateProfile(profileInput({
     fullName: "Updated again",
     provenance: replacement
@@ -2615,21 +2616,21 @@ test("adds, retrieves, updates, and deletes achievement records", () => {
 
 test("Achievement updates preserve provenance unless explicitly replaced", () => {
   const state = createCareerState();
-  const provenance = [{ sources: ["cv", { excerpt: "original" }] }];
+  const provenance = [provenanceItem({ sources: ["cv", { excerpt: "original" }] })];
   addAchievement(state, "achievement-1", achievementInput({ provenance }));
-  provenance[0].sources[1].excerpt = "mutated input";
+  provenance[0].extractedValue.sources[1].excerpt = "mutated input";
 
   const updated = state.updateAchievementRecord("achievement-1", achievementInput({
     title: "Updated achievement"
   }), updatedAt);
-  assert.deepEqual(updated.provenance, [{ sources: ["cv", { excerpt: "original" }] }]);
+  assert.deepEqual(updated.provenance, [provenanceItem({ sources: ["cv", { excerpt: "original" }] })]);
 
-  updated.provenance[0].sources[1].excerpt = "changed result";
+  updated.provenance[0].extractedValue.sources[1].excerpt = "changed result";
   assert.deepEqual(state.getAchievementRecords()[0].provenance, [
-    { sources: ["cv", { excerpt: "original" }] }
+    provenanceItem({ sources: ["cv", { excerpt: "original" }] })
   ]);
 
-  const replacement = [{ source: "manual", excerpt: "replacement" }];
+  const replacement = [provenanceItem("replacement")];
   const explicitlyUpdated = state.updateAchievementRecord("achievement-1", achievementInput({
     title: "Updated again",
     provenance: replacement

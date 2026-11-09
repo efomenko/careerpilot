@@ -1,3 +1,8 @@
+import { isCalendarDate, isUtcTimestamp } from "./model-validation.js";
+import { addProvenanceErrors, copyProvenance } from "./provenance-model.js";
+
+export { isJsonCompatibleProvenance, isUtcTimestamp } from "./model-validation.js";
+
 // Provenance may be absent, null, or an array; constructors default omissions to [].
 const profileFields = ["fullName", "headline", "summary", "skills", "provenance"];
 const employmentFields = [
@@ -54,44 +59,6 @@ function addStringError(value, field, errors) {
   } else if (typeof value[field] !== "string") {
     errors.push({ field, message: "This field must be a string." });
   }
-}
-
-function isCalendarDate(value) {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-
-  if (!match) {
-    return false;
-  }
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-
-  if (month < 1 || month > 12) {
-    return false;
-  }
-
-  const isLeapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const daysInMonth = [
-    31,
-    isLeapYear ? 29 : 28,
-    31,
-    30,
-    31,
-    30,
-    31,
-    31,
-    30,
-    31,
-    30,
-    31
-  ];
-
-  return day >= 1 && day <= daysInMonth[month - 1];
 }
 
 export function dateInterval(value) {
@@ -186,68 +153,6 @@ function normalizeEmploymentDate(value) {
     return { value, precision: "day" };
   }
   return value === null ? null : { ...value };
-}
-
-function addProvenanceErrors(value, errors) {
-  if (Object.hasOwn(value, "provenance") && value.provenance !== null
-    && (!Array.isArray(value.provenance) || !isJsonCompatibleProvenance(value.provenance))) {
-    errors.push({
-      field: "provenance",
-      message: "This field must be null or a JSON-compatible array."
-    });
-  }
-}
-
-// Provenance is opaque, but must survive JSON serialization without changing.
-export function isJsonCompatibleProvenance(value, active = new WeakSet()) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
-  if (typeof value === "number") {
-    return Number.isFinite(value) && !Object.is(value, -0)
-      && (!Number.isInteger(value) || Number.isSafeInteger(value));
-  }
-  if (typeof value !== "object" || active.has(value)) return false;
-  active.add(value);
-  try {
-    const array = Array.isArray(value);
-    const prototype = Object.getPrototypeOf(value);
-    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
-    const keys = Reflect.ownKeys(value);
-    const length = array ? Object.getOwnPropertyDescriptor(value, "length")?.value : 0;
-    if (array && (!Number.isSafeInteger(length) || keys.length !== length + 1)) return false;
-    for (const key of keys) {
-      if (array && key === "length") continue;
-      if (typeof key !== "string" || (array && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= length))) return false;
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor?.enumerable || !("value" in descriptor)
-        || !isJsonCompatibleProvenance(descriptor.value, active)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  } finally {
-    active.delete(value);
-  }
-}
-
-export function isUtcTimestamp(value) {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/.exec(value);
-
-  if (!match || !isCalendarDate(match[1])) {
-    return false;
-  }
-
-  const hour = Number(match[2]);
-  const minute = Number(match[3]);
-  const second = Number(match[4]);
-
-  return hour <= 23
-    && minute <= 59
-    && second <= 59
-    && new Date(value).toISOString() === value;
 }
 
 function addTimestampError(value, field, errors) {
@@ -420,7 +325,7 @@ export function createCareerProfile(input, metadata) {
     headline: input.headline,
     summary: input.summary,
     skills: [...input.skills],
-    provenance: input.provenance === null ? null : [...(input.provenance ?? [])],
+    provenance: copyProvenance(input.provenance === null ? null : (input.provenance ?? [])),
     createdAt: metadata.createdAt,
     updatedAt: metadata.createdAt
   };
@@ -447,7 +352,7 @@ export function createEmploymentRecord(input, metadata) {
     endDate: normalizeEmploymentDate(input.endDate),
     isCurrent: input.isCurrent,
     responsibilities: [...input.responsibilities],
-    provenance: input.provenance === null ? null : [...(input.provenance ?? [])],
+    provenance: copyProvenance(input.provenance === null ? null : (input.provenance ?? [])),
     createdAt: metadata.createdAt,
     updatedAt: metadata.createdAt
   };

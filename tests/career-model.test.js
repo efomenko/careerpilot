@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { provenanceItem } from "./provenance-fixture.js";
 import {
   createCareerProfile,
   createEmploymentRecord,
@@ -65,7 +66,7 @@ test("Profile and Employment provenance contents must be JSON-compatible", () =>
     assert.throws(() => createCareerProfile(profileInput({ provenance }), metadata), TypeError);
     assert.throws(() => createEmploymentRecord(employmentInput({ provenance }), metadata), TypeError);
   }
-  const provenance = [{ excerpt: "source", nested: [null, 1, 1.5, true] }];
+  const provenance = [provenanceItem([null, 1, 1.5, true])];
   assert.equal(validateCareerProfile(createCareerProfile(profileInput({ provenance }), metadata)).valid, true);
   assert.equal(validateEmploymentRecord(createEmploymentRecord(employmentInput({ provenance }), metadata)).valid, true);
 });
@@ -140,7 +141,7 @@ test("accepts and validates provenance containers on profiles", () => {
 });
 
 test("Profile and Employment constructors and validators agree on provenance", () => {
-  for (const provenance of [undefined, null, [], [{ excerpt: "source" }]]) {
+  for (const provenance of [undefined, null, [], [provenanceItem()]]) {
     const fields = provenance === undefined ? {} : { provenance };
     const profile = createCareerProfile(profileInput(fields), { id: "p", createdAt: timestamp });
     const employment = createEmploymentRecord(employmentInput(fields), { id: "e", createdAt: timestamp });

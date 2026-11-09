@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { provenanceItem } from "./provenance-fixture.js";
 import {
   createAchievementRecord,
   validateAchievementRecord
@@ -48,7 +49,7 @@ test("Achievement provenance contents must be JSON-compatible", () => {
       id: "id", createdAt: timestamp
     }), TypeError);
   }
-  const provenance = [{ excerpt: "source", nested: [null, 1, 1.5, true] }];
+  const provenance = [provenanceItem([null, 1, 1.5, true])];
   assert.equal(validateAchievementRecord(createAchievementRecord(achievementInput({ provenance }), {
     id: "id", createdAt: timestamp
   })).valid, true);
@@ -81,7 +82,7 @@ test("constructs and validates a complete achievement", () => {
 });
 
 test("Achievement constructors and validators agree on provenance", () => {
-  for (const provenance of [undefined, null, [], [{ excerpt: "source" }]]) {
+  for (const provenance of [undefined, null, [], [provenanceItem()]]) {
     const fields = provenance === undefined ? {} : { provenance };
     const record = createAchievementRecord(achievementInput(fields), {
       id: "achievement-id", createdAt: timestamp
@@ -103,7 +104,7 @@ test("defaults omitted optional fields and arrays", () => {
   });
 
   test("accepts provenance arrays and rejects non-array provenance values", () => {
-    const provenance = [{ source: "cv", excerpts: ["text"] }];
+    const provenance = [provenanceItem()];
     const record = createAchievementRecord(achievementInput({ provenance }), {
       id: "achievement-id",
       createdAt: timestamp

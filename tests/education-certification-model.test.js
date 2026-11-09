@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { provenanceItem } from "./provenance-fixture.js";
 import { createEducationRecord, validateEducationRecord } from "../src/js/education-model.js";
 import { createCertificationRecord, validateCertificationRecord } from "../src/js/certification-model.js";
 
@@ -175,7 +176,7 @@ for (const model of cases) {
       assert.throws(() => model.create({ ...model.input, provenance: value }, metadata),
         (error) => error.errors.some((item) => item.field === "provenance"));
     }
-    for (const provenance of [null, [], [{ excerpt: "source", nested: [null, true, 1.5] }]]) {
+    for (const provenance of [null, [], [provenanceItem([null, true, 1.5])]]) {
       const result = model.create({ ...model.input, provenance }, metadata);
       assert.deepEqual(result.provenance, provenance);
       assert.equal(model.validate(result).valid, true);
@@ -187,7 +188,7 @@ for (const model of cases) {
   });
 
   test(`${model.name}: validation does not mutate input`, () => {
-    const value = record({ provenance: [{ excerpt: "source" }], [model.dates[0]]: year("2020") });
+    const value = record({ provenance: [provenanceItem()], [model.dates[0]]: year("2020") });
     const before = structuredClone(value);
     model.validate(value);
     assert.deepEqual(value, before);
