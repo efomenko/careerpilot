@@ -784,11 +784,13 @@ does not write during load or migration.
 Current Employment dates use structured year, month, or day precision.
 Profile, Employment, and Achievement records support provenance arrays.
 Education, Certification, and import collections are JSON-compatible
-containers, not completed domain models or workflows. State mutations
+containers; standalone Education, Certification, provenance, and import
+models exist, but those collections and workflows are not fully integrated.
+State mutations
 change live memory before the normal persistence callback; a failed write
 leaves the in-memory mutation available and reports that it was not persisted.
-There is no complete import-session, Education or Certification domain model,
-field-level provenance workflow, revision mechanism, idempotency support,
+There is no complete import review workflow, field-level provenance workflow,
+revision mechanism, idempotency support,
 atomic batch API, storage-event handling, or cross-tab lock. `restoreSnapshot`
 validates and restores into a fresh state; it is not an atomic live-state
 replacement API.
@@ -937,6 +939,36 @@ decisions.
 Processing-attempt details and any additional decision or association object
 fields remain implementation details to be finalized without changing the
 approved session fields, candidate fields, states, and behaviors above.
+
+For the standalone CV-005 models, constructors take complete records and do
+not generate IDs, timestamps, or defaults. Candidate `originalData` and
+`reviewedData` are JSON-compatible values; constructors detach both, freeze
+the original copy, and make its property non-writable. `fieldProvenance` maps
+each field path to an array of CV-004 provenance records with the same
+`fieldPath`. Validation has `status`, `errors`, and `warnings`; each finding
+is `{ code, message }` with non-blank strings. Findings determine the status:
+any errors mean `invalid`; warnings without errors mean `warning`; no findings
+mean `valid`. Codes are supplied by callers; their
+catalog and stability across revalidations remain to be defined and enforced
+by the validation workflow.
+Duplicate suggestions are `{ targetRecordId, similaritySignals, matchLevel }`,
+with one or more non-blank string signals. Add and skip decisions are
+`{ candidateId, action }`. Merge decisions are
+`{ candidateId, action: "merge", targetRecordId, fieldChoices }`, with a
+non-blank target ID and a `fieldChoices` object mapping non-blank field paths
+to `"existing"` or `"reviewed"`. An empty map represents no identified
+conflicts; the later review workflow must verify completeness against the
+actual target and require renewed review if it changes. Merge-only fields are
+not accepted on add or skip decisions. Processing attempts are JSON-compatible
+objects whose internal fields are not yet specified. Source-document `status`
+is a non-blank string because its enum is not yet approved.
+
+The models check the fixed seven-day expiry and a `deleteBy` between upload
+and 24 hours later. They cannot establish that the file was actually deleted
+after successful processing. Warning acknowledgement, determining conflicts
+and choice completeness, lifecycle transitions, revalidation, cleanup, and
+edit tracking require later workflows and are not enforced by these standalone
+models.
 
 ### 16.5 Field-level provenance and structured dates
 
