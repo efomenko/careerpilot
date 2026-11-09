@@ -1,3 +1,6 @@
+import { isJsonCompatibleProvenance } from "./career-model.js";
+
+// Provenance may be absent, null, or an array; constructors default omissions to [].
 const achievementInputFields = [
   "title",
   "context",
@@ -7,7 +10,8 @@ const achievementInputFields = [
   "potentialImpact",
   "metrics",
   "evidence",
-  "employmentId"
+  "employmentId",
+  "provenance"
 ];
 const achievementRecordFields = [
   "id",
@@ -243,6 +247,11 @@ function validateAchievementFields(value, errors) {
 
   addEmploymentIdErrors(value, errors, true);
 
+  if (Object.hasOwn(value, "provenance") && value.provenance !== null
+    && (!Array.isArray(value.provenance) || !isJsonCompatibleProvenance(value.provenance))) {
+    errors.push({ field: "provenance", message: "This field must be null or a JSON-compatible array." });
+  }
+
   if (!Object.hasOwn(value, "verificationStatus")) {
     errors.push({
       field: "verificationStatus",
@@ -310,6 +319,11 @@ function addInputErrors(input) {
     errors.push({ field: "evidence", message: "This field must be an array." });
   }
 
+  if (Object.hasOwn(input, "provenance") && input.provenance !== null
+    && (!Array.isArray(input.provenance) || !isJsonCompatibleProvenance(input.provenance))) {
+    errors.push({ field: "provenance", message: "This field must be null or a JSON-compatible array." });
+  }
+
   addEmploymentIdErrors(input, errors, false);
   return errors;
 }
@@ -342,6 +356,7 @@ export function createAchievementRecord(input, metadata) {
     potentialImpact: input.potentialImpact ?? "",
     metrics: input.metrics ?? [],
     evidence: input.evidence ?? [],
+    provenance: Object.hasOwn(input, "provenance") ? input.provenance : [],
     employmentId: input.employmentId ?? null,
     verificationStatus: "unverified"
   };
@@ -361,7 +376,8 @@ export function createAchievementRecord(input, metadata) {
     ...record,
     actions: [...record.actions],
     metrics: record.metrics.map((metric) => ({ ...metric })),
-    evidence: [...record.evidence]
+    evidence: [...record.evidence],
+    provenance: record.provenance === null ? null : [...record.provenance]
   };
 }
 

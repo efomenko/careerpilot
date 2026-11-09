@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCareerStorage } from "../src/js/career-storage.js";
+import { createCareerState } from "../src/js/career-state.js";
+import { createCareerPersistence } from "../src/js/career-persistence.js";
 
 const timestamp = "2025-04-20T14:30:00.000Z";
 const storageKey = "careerpilot.state";
@@ -81,7 +83,7 @@ function requirementRecord(overrides = {}) {
 }
 
 function snapshot(overrides = {}) {
-  return {
+  const data = {
     profile: profileRecord(),
     employmentRecords: [employmentRecord()],
     achievementRecords: [achievementRecord()],
@@ -89,13 +91,65 @@ function snapshot(overrides = {}) {
     requirements: [],
     legacyRequirements: [],
     achievementMappings: [],
+    educationRecords: [],
+    certificationRecords: [],
+    import: {
+      sessions: [],
+      completedBatches: [],
+      importReports: []
+    },
     ...overrides
+  };
+  const addProvenance = (record) => ({
+    ...record,
+    provenance: record.provenance ?? []
+  });
+  const structuredDate = (date) => typeof date === "string"
+    ? { value: date, precision: "day" }
+    : date;
+  return {
+    ...data,
+    profile: data.profile === null ? null : addProvenance(data.profile),
+    employmentRecords: data.employmentRecords.map((record) => addProvenance({
+      ...record,
+      startDate: structuredDate(record.startDate),
+      endDate: structuredDate(record.endDate)
+    })),
+    achievementRecords: data.achievementRecords.map(addProvenance)
   };
 }
 
 function v2Snapshot(overrides = {}) {
-  const { legacyRequirements, ...value } = snapshot(overrides);
-  return value;
+  const data = snapshot(overrides);
+  const removeProvenance = (record) => {
+    const { provenance, ...value } = record;
+    return value;
+  };
+  const legacyDate = (date) => (
+    date !== null
+    && typeof date === "object"
+    && date.precision === "day"
+      ? date.value
+      : date
+  );
+  const value = { ...data };
+  delete value.legacyRequirements;
+  delete value.educationRecords;
+  delete value.certificationRecords;
+  delete value.import;
+  return {
+    ...value,
+    profile: data.profile === null ? null : removeProvenance(data.profile),
+    employmentRecords: data.employmentRecords.map((record) => {
+      const { provenance, ...legacyRecord } = record;
+      return {
+        ...legacyRecord,
+        startDate: legacyDate(record.startDate),
+        endDate: legacyDate(record.endDate)
+      };
+    }),
+    achievementRecords: data.achievementRecords.map(removeProvenance)
+  };
 }
 
 function v1Snapshot(overrides = {}) {
@@ -107,12 +161,28 @@ function v1Snapshot(overrides = {}) {
   };
 }
 
+function v3Snapshot(overrides = {}) {
+  const data = v2Snapshot(overrides);
+  return {
+    ...data,
+    legacyRequirements: overrides.legacyRequirements ?? []
+  };
+}
+
 function envelope(value = snapshot(), overrides = {}) {
+  return { version: 4, ...value, ...overrides };
+}
+
+function v3Envelope(value = v3Snapshot(), overrides = {}) {
   return { version: 3, ...value, ...overrides };
 }
 
 function v2Envelope(value = v2Snapshot(), overrides = {}) {
   return { version: 2, ...value, ...overrides };
+}
+
+function storedV3(value = v3Snapshot(), overrides = {}) {
+  return JSON.stringify(v3Envelope(value, overrides));
 }
 
 function v1Envelope(value = v1Snapshot(), overrides = {}) {
@@ -177,7 +247,7 @@ test("missing storage returns an empty snapshot", () => {
   assert.deepEqual(fake.calls.getItem, [storageKey]);
 });
 
-test("loads a valid version-3 envelope", () => {
+test("loads a valid version-4 envelope", () => {
   const data = snapshot({ jobs: [jobRecord()] });
   const result = createCareerStorage(createFakeStorage(stored(data))).load();
 
@@ -190,7 +260,10 @@ test("loads a valid version-3 envelope", () => {
     "jobs",
     "requirements",
     "legacyRequirements",
-    "achievementMappings"
+    "achievementMappings",
+    "educationRecords",
+    "certificationRecords",
+    "import"
   ]);
 });
 
@@ -209,7 +282,38 @@ test("loads JSON-compatible legacy Requirements without constraining entry types
   assert.deepEqual(result.snapshot.legacyRequirements, legacyRequirements);
 });
 
-test("rejects non-array legacy Requirements when loading a v3 envelope", () => {
+test("validates v4 collection and import container shapes", () => {
+  const invalidSnapshots = [
+    snapshot({ educationRecords: {} }),
+    snapshot({ certificationRecords: "not-an-array" }),
+    snapshot({ import: [] }),
+    snapshot({ import: { sessions: [], completedBatches: [] } }),
+    snapshot({ import: {
+      sessions: [],
+      completedBatches: [],
+      importReports: [],
+      extra: true
+    } }),
+    snapshot({ import: {
+      sessions: [],
+      completedBatches: "not-an-array",
+      importReports: []
+    } })
+  ];
+
+  for (const data of invalidSnapshots) {
+    const raw = JSON.stringify(envelope(data));
+    const fake = createFakeStorage(raw);
+    const result = createCareerStorage(fake).load();
+
+    assert.equal(result.status, "corrupt");
+    assert.ok(result.error.errors.length > 0);
+    assert.deepEqual(fake.calls.setItem, []);
+    assert.equal(fake.values.get(storageKey), raw);
+  }
+});
+
+test("rejects non-array legacy Requirements when loading a v4 envelope", () => {
   for (const legacyRequirements of [{ legacy: true }, "legacy requirement"]) {
     const data = snapshot({ legacyRequirements });
     const result = createCareerStorage(createFakeStorage(stored(data))).load();
@@ -251,10 +355,10 @@ test("loads a valid version-2 envelope and migrates its Requirements", () => {
   const result = createCareerStorage(createFakeStorage(storedV2(data))).load();
 
   assert.equal(result.status, "loaded");
-  assert.deepEqual(result.snapshot, {
+  assert.deepEqual(result.snapshot, snapshot({
     ...data,
     legacyRequirements: []
-  });
+  }));
 });
 
 test("classifies v2 Requirements while preserving data, mappings, and relative order", () => {
@@ -347,15 +451,16 @@ test("classifies v2 Requirements while preserving data, mappings, and relative o
     invalidJob
   ]);
   assert.deepEqual(result.snapshot.achievementMappings, mappings);
-  assert.deepEqual(result.snapshot.profile, original.profile);
-  assert.deepEqual(result.snapshot.employmentRecords, original.employmentRecords);
-  assert.deepEqual(result.snapshot.achievementRecords, original.achievementRecords);
+  const expectedV4 = snapshot(data);
+  assert.deepEqual(result.snapshot.profile, expectedV4.profile);
+  assert.deepEqual(result.snapshot.employmentRecords, expectedV4.employmentRecords);
+  assert.deepEqual(result.snapshot.achievementRecords, expectedV4.achievementRecords);
   assert.deepEqual(result.snapshot.jobs, jobs);
   assert.deepEqual(data, original);
   assert.deepEqual(fake.calls.setItem, []);
 });
 
-test("migrates valid empty version-1 snapshots through version 3 without writing", () => {
+test("migrates valid empty version-1 snapshots through version 4 without writing", () => {
   const data = {
     profile: null,
     employmentRecords: [],
@@ -380,7 +485,7 @@ test("migrates valid empty version-1 snapshots through version 3 without writing
   assert.equal(fake.values.get(storageKey), original);
 });
 
-test("migrates populated version-1 snapshots through version 3", () => {
+test("migrates populated version-1 snapshots through version 4", () => {
   const data = v1Snapshot({
     achievementRecords: [achievementRecord({
       employmentId: "employment-1",
@@ -409,8 +514,8 @@ test("migrates populated version-1 snapshots through version 3", () => {
   fake.setError = null;
   assert.equal(adapter.save(result.snapshot).status, "saved");
   const saved = JSON.parse(fake.values.get(storageKey));
-  assert.equal(saved.version, 3);
-  assert.deepEqual(saved, { version: 3, ...result.snapshot });
+  assert.equal(saved.version, 4);
+  assert.deepEqual(saved, { version: 4, ...result.snapshot });
 });
 
 test("rejects malformed version-1 snapshots during migration", () => {
@@ -434,6 +539,133 @@ test("rejects malformed version-1 snapshots during migration", () => {
     assert.equal(fake.values.get(storageKey), original);
     assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
     assert.deepEqual(fake.calls.setItem, []);
+  }
+});
+
+test("migrates a valid version-3 snapshot to v4 without writing", () => {
+  const data = v3Snapshot({
+    employmentRecords: [employmentRecord({
+      startDate: "2019-05-01",
+      endDate: null,
+      isCurrent: false
+    })]
+  });
+  const raw = storedV3(data);
+  const expected = snapshot(data);
+  const fake = createFakeStorage(raw);
+  const result = createCareerStorage(fake).load();
+
+  assert.equal(result.status, "loaded");
+  assert.deepEqual(result.snapshot, expected);
+  assert.deepEqual(result.snapshot.employmentRecords[0].startDate, {
+    value: "2019-05-01",
+    precision: "day"
+  });
+  assert.equal(result.snapshot.employmentRecords[0].endDate, null);
+  assert.deepEqual(result.snapshot.profile.provenance, []);
+  assert.deepEqual(result.snapshot.achievementRecords[0].provenance, []);
+  assert.deepEqual(fake.calls.setItem, []);
+  assert.equal(fake.values.get(storageKey), raw);
+});
+
+test("rejects v3 Employment dates with year 0000 without replacing stored data", () => {
+  const data = v3Snapshot({
+    employmentRecords: [employmentRecord({
+      startDate: "0000-01-01",
+      endDate: "0000-01-01",
+      isCurrent: false
+    })]
+  });
+  const raw = storedV3(data);
+  const fake = createFakeStorage(raw);
+  const adapter = createCareerStorage(fake);
+  const result = adapter.load();
+
+  assert.equal(result.status, "corrupt");
+  assert.ok(result.error.errors.some((error) => /Year 0000/.test(error.message)));
+  assert.deepEqual(fake.calls.setItem, []);
+  assert.equal(fake.values.get(storageKey), raw);
+  assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
+});
+
+test("historical migrations preserve supplied provenance and default missing provenance", () => {
+  for (const provenance of [null, [], [{ excerpt: "source" }]]) {
+    const data = v3Snapshot();
+    data.profile.provenance = provenance;
+    data.employmentRecords[0].provenance = provenance;
+    data.achievementRecords[0].provenance = provenance;
+    const fake = createFakeStorage(storedV3(data));
+    const result = createCareerStorage(fake).load();
+    assert.equal(result.status, "loaded");
+    assert.deepEqual(result.snapshot.profile.provenance, provenance);
+    assert.deepEqual(result.snapshot.employmentRecords[0].provenance, provenance);
+    assert.deepEqual(result.snapshot.achievementRecords[0].provenance, provenance);
+    assert.deepEqual(fake.calls.setItem, []);
+  }
+  const missing = createCareerStorage(createFakeStorage(storedV3())).load();
+  assert.deepEqual(missing.snapshot.profile.provenance, []);
+});
+
+test("historical malformed dates and provenance return corrupt without throwing", () => {
+  for (const date of [{ value: "2020", precision: "year" }, null, "2020-02-30", 123]) {
+    const data = v3Snapshot();
+    data.employmentRecords[0].startDate = date;
+    const raw = storedV3(data);
+    const fake = createFakeStorage(raw);
+    const adapter = createCareerStorage(fake);
+    const result = adapter.load();
+    assert.equal(result.status, "corrupt");
+    assert.equal(result.writesDisabled, true);
+    assert.equal(fake.values.get(storageKey), raw);
+    assert.deepEqual(fake.calls.setItem, []);
+  }
+  const data = v3Snapshot();
+  data.profile.provenance = "not an array";
+  assert.equal(createCareerStorage(createFakeStorage(storedV3(data))).load().status, "corrupt");
+  for (const [version, historical] of [[1, v1Snapshot()], [2, v2Snapshot()]]) {
+    historical.employmentRecords[0].startDate = { value: "2020", precision: "year" };
+    const raw = JSON.stringify({ version, ...historical });
+    assert.equal(createCareerStorage(createFakeStorage(raw)).load().status, "corrupt");
+  }
+});
+
+test("v4 chronology uses known intervals without inventing unknown dates", () => {
+  const cases = [
+    [null, { value: "1900", precision: "year" }, true],
+    [{ value: "2021", precision: "year" }, null, true],
+    [{ value: "2021", precision: "year" }, { value: "2021-01", precision: "month" }, true],
+    [{ value: "2021-05", precision: "month" }, { value: "2021-05-01", precision: "day" }, true],
+    [{ value: "2021-05-17", precision: "day" }, { value: "2021-05", precision: "month" }, true],
+    [{ value: "2021", precision: "year" }, { value: "2020-12-31", precision: "day" }, false],
+    [{ value: "2021-05", precision: "month" }, { value: "2021-04", precision: "month" }, false],
+    [{ value: "2021-05-17", precision: "day" }, { value: "2021-05-16", precision: "day" }, false]
+  ];
+  for (const [startDate, endDate, valid] of cases) {
+    const data = snapshot({
+      employmentRecords: [employmentRecord({ startDate, endDate, isCurrent: false })]
+    });
+    const adapter = createCareerStorage(createFakeStorage());
+    assert.equal(adapter.save(data).status, valid ? "saved" : "invalid-snapshot");
+  }
+});
+
+test("v4 storage checks provenance types and rejects lossy opaque values", () => {
+  for (const provenance of [null, [], [{ excerpt: "source" }]]) {
+    const data = snapshot();
+    data.profile.provenance = provenance;
+    data.employmentRecords[0].provenance = provenance;
+    data.achievementRecords[0].provenance = provenance;
+    assert.equal(createCareerStorage(createFakeStorage()).save(data).status, "saved");
+  }
+  const invalid = snapshot();
+  invalid.profile.provenance = "invalid";
+  assert.equal(createCareerStorage(createFakeStorage()).save(invalid).status, "invalid-snapshot");
+  assert.equal(createCareerStorage(createFakeStorage(stored(invalid))).load().status, "corrupt");
+  const cycle = {};
+  cycle.self = cycle;
+  for (const value of [undefined, NaN, -0, 1n, new Date(), new Array(1), cycle]) {
+    const data = snapshot({ educationRecords: [value] });
+    assert.equal(createCareerStorage(createFakeStorage()).save(data).status, "json-fidelity-error");
   }
 });
 
@@ -510,11 +742,11 @@ test("accepts multiple Jobs and classifies Requirement and Mapping entries", () 
   const result = createCareerStorage(createFakeStorage(storedV2(data))).load();
 
   assert.equal(result.status, "loaded");
-  assert.deepEqual(result.snapshot, {
+  assert.deepEqual(result.snapshot, snapshot({
     ...data,
     requirements: [requirementRecord()],
     legacyRequirements: [{ id: "incomplete", jobId: "job-1" }]
-  });
+  }));
 });
 
 test("classifies valid Requirements in source order and invalid entries as legacy", () => {
@@ -605,20 +837,236 @@ test("malformed v2 Requirements fail safely without overwriting stored data", ()
   assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
 });
 
-test("preserves finite JSON numbers in legacy Requirement entries", () => {
-  const data = v2Snapshot({ requirements: [{ id: "legacy", unsupported: -0 }] });
+test("loads historical negative zero and prevents subsequent lossy writes", () => {
+  const data = v2Snapshot({ requirements: [{ id: "legacy", unsupported: -0, ordinary: 4.5 }] });
   const raw = storedV2(data).replace('"unsupported":0', '"unsupported":-0');
-  const result = createCareerStorage(createFakeStorage(raw)).load();
-
+  const fake = createFakeStorage(raw);
+  const adapter = createCareerStorage(fake);
+  const result = adapter.load();
   assert.equal(result.status, "loaded");
-  assert.equal(result.snapshot.legacyRequirements.length, 1);
-  assert.equal(
-    Object.is(result.snapshot.legacyRequirements[0].unsupported, -0),
-    true
-  );
+  assert.equal(result.writesDisabled, true);
+  assert.ok(Object.is(result.snapshot.legacyRequirements[0].unsupported, -0));
+  assert.equal(result.snapshot.legacyRequirements[0].ordinary, 4.5);
+  const state = createCareerState();
+  state.restoreSnapshot(result.snapshot);
+  assert.ok(Object.is(state.getSnapshot().legacyRequirements[0].unsupported, -0));
+  assert.deepEqual(adapter.save(state.getSnapshot()), { status: "writes-disabled" });
+  assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
+  assert.equal(adapter.load().writesDisabled, true);
+  assert.equal(createCareerStorage(fake).save(snapshot()).status, "writes-disabled");
+  const freshFake = createFakeStorage(raw);
+  assert.equal(createCareerStorage(freshFake).save(snapshot()).status, "writes-disabled");
+  assert.equal(freshFake.values.get(storageKey), raw);
+  assert.deepEqual(freshFake.calls.setItem, []);
+  assert.equal(fake.values.get(storageKey), raw);
+  assert.deepEqual(fake.calls.setItem, []);
+
+  const persistentFake = createFakeStorage(raw);
+  const persistence = createCareerPersistence(persistentFake);
+  assert.ok(Object.is(persistence.state.getSnapshot().legacyRequirements[0].unsupported, -0));
+  assert.equal(persistence.getStatus().persistentWarning.kind, "read-only");
+  assert.match(persistence.getStatus().persistentWarning.message, /remains available.*cannot be saved/);
+  persistence.state.updateProfile({ fullName: "New", headline: "", summary: "", skills: [] }, timestamp);
+  assert.equal(persistence.getStatus().transientWarning.kind, "write-disabled");
+  assert.equal(persistence.getStatus().persistentWarning.kind, "read-only");
+  assert.equal(persistentFake.values.get(storageKey), raw);
+  assert.deepEqual(persistentFake.calls.setItem, []);
+
+  const v3Data = v3Snapshot({ legacyRequirements: [{ score: -0 }] });
+  const v3Raw = storedV3(v3Data).replace('"score":0', '"score":-0');
+  const v3Fake = createFakeStorage(v3Raw);
+  const v3Adapter = createCareerStorage(v3Fake);
+  const v3Result = v3Adapter.load();
+  assert.equal(v3Result.status, "loaded");
+  assert.equal(v3Result.writesDisabled, true);
+  assert.ok(Object.is(v3Result.snapshot.legacyRequirements[0].score, -0));
+  assert.equal(v3Adapter.save(snapshot()).status, "writes-disabled");
+  assert.equal(v3Fake.values.get(storageKey), v3Raw);
+
+  const ordinaryRaw = storedV2(v2Snapshot({ requirements: [{ score: 4.5 }] }));
+  const ordinaryFake = createFakeStorage(ordinaryRaw);
+  const ordinaryAdapter = createCareerStorage(ordinaryFake);
+  const ordinaryResult = ordinaryAdapter.load();
+  assert.equal(ordinaryResult.status, "loaded");
+  assert.equal(ordinaryAdapter.save(ordinaryResult.snapshot).status, "saved");
+  assert.equal(ordinaryAdapter.load().snapshot.legacyRequirements[0].score, 4.5);
 });
 
-test("repeated v3 loads preserve records and do not write", () => {
+test("unsafe integer tokens protect stored bytes before hydration and direct saves", () => {
+  for (const token of ["9007199254740993", "9007199254740992", "-9007199254740993",
+    "9.007199254740992e15", "9007199254740992.0"]) {
+    const raw = stored(snapshot({ educationRecords: [{ value: 1 }] })).replace('"value":1', `"value":${token}`);
+    const fake = createFakeStorage(raw);
+    const adapter = createCareerStorage(fake);
+    assert.deepEqual(adapter.load(), { status: "protected", reason: "unsafe-integer", writesDisabled: true });
+    assert.equal(adapter.save(snapshot()).status, "writes-disabled");
+    assert.equal(createCareerStorage(fake).save(snapshot()).status, "writes-disabled");
+    const persistence = createCareerPersistence(fake);
+    assert.equal(persistence.getStatus().persistentWarning.kind, "read-only");
+    assert.match(persistence.getStatus().persistentWarning.message, /not been loaded.*cannot be saved/);
+    persistence.state.createProfile({ fullName: "New", headline: "", summary: "", skills: [] }, {
+      id: "new", createdAt: timestamp
+    });
+    assert.equal(persistence.getStatus().transientWarning.kind, "write-disabled");
+    assert.equal(fake.values.get(storageKey), raw);
+    assert.deepEqual(fake.calls.setItem, []);
+  }
+});
+
+test("fractional precision loss protects numeric tokens in v1 through v4 snapshots", () => {
+  const cases = [
+    v1Envelope(v1Snapshot({ achievementRecords: [achievementRecord({ evidence: [{ score: 1 }] })] })),
+    v2Envelope(v2Snapshot({ requirements: [{ score: 1 }] })),
+    v3Envelope(v3Snapshot({ achievementMappings: [{ score: 1 }] })),
+    envelope(snapshot({ import: { sessions: [{ score: 1 }], completedBatches: [], importReports: [] } }))
+  ];
+
+  for (const data of cases) {
+    const raw = JSON.stringify(data).replace('"score":1', '"score":0.1234567890123456789');
+    const fake = createFakeStorage(raw);
+    const adapter = createCareerStorage(fake);
+    assert.deepEqual(adapter.load(), {
+      status: "protected", reason: "numeric-precision", writesDisabled: true
+    }, `version ${data.version}`);
+    assert.equal(adapter.save(snapshot()).status, "writes-disabled");
+    assert.equal(createCareerStorage(fake).save(snapshot()).status, "writes-disabled");
+    assert.equal(fake.values.get(storageKey), raw);
+    assert.deepEqual(fake.calls.setItem, []);
+  }
+});
+
+test("decimal token protection compares values and handles numeric boundaries", () => {
+  const accepted = [
+    "0.1", "1.25", "1.2500", "1e-3", "0.001", "100e-2",
+    "-1.2500", "5e-324", "1e-323",
+    `1${"0".repeat(1000)}e-1000`, `0e${"9".repeat(1000)}`
+  ];
+  const protectedTokens = [
+    "0.1234567890123456789", "-0.1234567890123456789", "0.10000000000000001",
+    "1e-400", "-1e-400", "4e-324", "9007199254740991.1",
+    `1e-${"9".repeat(1000)}`
+  ];
+  for (const token of accepted) {
+    const raw = stored(snapshot({ educationRecords: [{ value: 1 }] }))
+      .replace('"value":1', `"value":${token}`);
+    const fake = createFakeStorage(raw);
+    const adapter = createCareerStorage(fake);
+    const result = adapter.load();
+    assert.equal(result.status, "loaded", token);
+    assert.equal(adapter.save(result.snapshot).status, "saved", token);
+  }
+  for (const token of protectedTokens) {
+    const raw = stored(snapshot({ educationRecords: [{ value: 1 }] }))
+      .replace('"value":1', `"value":${token}`);
+    const fake = createFakeStorage(raw);
+    assert.deepEqual(createCareerStorage(fake).load(), {
+      status: "protected", reason: "numeric-precision", writesDisabled: true
+    }, token);
+    assert.equal(fake.values.get(storageKey), raw);
+    assert.deepEqual(fake.calls.setItem, []);
+  }
+  for (const token of ["1.7976931348623157e308", "1e400", "-1e400", `1e${"9".repeat(1000)}`]) {
+    const raw = stored(snapshot({ educationRecords: [{ value: 1 }] }))
+      .replace('"value":1', `"value":${token}`);
+    const fake = createFakeStorage(raw);
+    assert.equal(createCareerStorage(fake).load().status, "protected", token);
+    assert.equal(fake.values.get(storageKey), raw);
+    assert.deepEqual(fake.calls.setItem, []);
+  }
+});
+
+test("number-like text in escaped JSON strings is not scanned as numeric tokens", () => {
+  const value = 'Quote: "0.1234567890123456789", slash: \\1e-400, 4e-324';
+  const fake = createFakeStorage(stored(snapshot({ educationRecords: [{ value }] })));
+  const adapter = createCareerStorage(fake);
+  const result = adapter.load();
+  assert.equal(result.status, "loaded");
+  assert.equal(result.snapshot.educationRecords[0].value, value);
+  assert.equal(adapter.save(result.snapshot).status, "saved");
+});
+
+test("fractional precision loss discovered by the final storage check blocks a write", () => {
+  const protectedRaw = stored(snapshot({ educationRecords: [{ score: 1 }] }))
+    .replace('"score":1', '"score":0.1234567890123456789');
+  let raw = stored(snapshot());
+  let reads = 0;
+  let writes = 0;
+  const adapter = createCareerStorage({
+    getItem() {
+      reads += 1;
+      if (reads === 2) raw = protectedRaw;
+      return raw;
+    },
+    setItem(key, value) { writes += 1; raw = value; }
+  });
+  assert.equal(adapter.save(snapshot()).status, "writes-disabled");
+  assert.equal(raw, protectedRaw);
+  assert.equal(writes, 0);
+  assert.equal(adapter.save(snapshot()).status, "writes-disabled");
+});
+
+test("invalid provenance content is rejected by state and storage without writing", () => {
+  for (const provenance of [[undefined], [NaN], [-0], [9007199254740992], [new Date()]]) {
+    const data = snapshot();
+    data.profile.provenance = provenance;
+    const state = createCareerState();
+    assert.throws(() => state.restoreSnapshot(data));
+    const fake = createFakeStorage();
+    assert.notEqual(createCareerStorage(fake).save(data).status, "saved");
+    assert.deepEqual(fake.calls.setItem, []);
+  }
+});
+
+test("safe integers, decimals and numbers inside strings continue to round-trip", () => {
+  const data = snapshot({ educationRecords: [{ safe: 9007199254740991, decimal: 12.25,
+    text: '9007199254740993 \\" -9007199254740993' }] });
+  const fake = createFakeStorage(stored(data));
+  const storage = createCareerStorage(fake);
+  const loaded = storage.load();
+  assert.equal(loaded.status, "loaded");
+  assert.equal(storage.save(loaded.snapshot).status, "saved");
+  assert.deepEqual(storage.load().snapshot.educationRecords, data.educationRecords);
+});
+
+test("save rechecks storage immediately before writing", () => {
+  const protectedRaw = storedV2(v2Snapshot({ requirements: [{ score: -0 }] }))
+    .replace('"score":0', '"score":-0');
+  let raw = stored(snapshot());
+  let reads = 0;
+  let writes = 0;
+  const storage = createCareerStorage({
+    getItem() {
+      reads += 1;
+      if (reads === 2) raw = protectedRaw;
+      return raw;
+    },
+    setItem(key, value) { writes += 1; raw = value; }
+  });
+  assert.equal(storage.save(snapshot()).status, "writes-disabled");
+  assert.equal(raw, protectedRaw);
+  assert.equal(writes, 0);
+});
+
+test("storage serializes the same detached descriptor values it validates", () => {
+  const proxy = new Proxy({ value: "original" }, {
+    get(target, key, receiver) {
+      return key === "value" ? "changed" : Reflect.get(target, key, receiver);
+    }
+  });
+  const data = snapshot({ educationRecords: [proxy, { nested: [2, "ordinary"] }] });
+  const fake = createFakeStorage();
+  const adapter = createCareerStorage(fake);
+  const result = adapter.save(data);
+  assert.equal(result.status, "saved");
+  assert.deepEqual(JSON.parse(fake.values.get(storageKey)).educationRecords, [
+    { value: "original" }, { nested: [2, "ordinary"] }
+  ]);
+  assert.deepEqual(adapter.load().snapshot.educationRecords, [
+    { value: "original" }, { nested: [2, "ordinary"] }
+  ]);
+});
+
+test("repeated v4 loads preserve records and do not write", () => {
   const data = snapshot({
     jobs: [jobRecord()],
     requirements: [requirementRecord()],
@@ -687,14 +1135,14 @@ test("rejects a non-numeric envelope version as corrupt", () => {
 });
 
 test("reports a numeric unsupported version distinctly and disables writes", () => {
-  const original = JSON.stringify(envelope(snapshot(), { version: 4 }));
+  const original = JSON.stringify(envelope(snapshot(), { version: 5 }));
   const fake = createFakeStorage(original);
   const adapter = createCareerStorage(fake);
   const result = adapter.load();
 
   assert.deepEqual(result, {
     status: "unsupported-version",
-    version: 4,
+    version: 5,
     writesDisabled: true
   });
   assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
@@ -777,7 +1225,7 @@ test("a throwing getItem returns unavailable without disabling writes", () => {
   assert.equal(adapter.save(snapshot()).status, "saved");
 });
 
-test("saves the exact version-3 envelope with one setItem call", () => {
+test("saves the exact version-4 envelope with one setItem call", () => {
   const fake = createFakeStorage();
   const data = snapshot();
   const result = createCareerStorage(fake).save(data);
@@ -789,15 +1237,18 @@ test("saves the exact version-3 envelope with one setItem call", () => {
   assert.deepEqual(Object.keys(saved).sort(), [
     "achievementMappings",
     "achievementRecords",
+    "certificationRecords",
+    "educationRecords",
     "employmentRecords",
+    "import",
     "jobs",
     "legacyRequirements",
     "profile",
     "requirements",
     "version"
   ]);
-  assert.equal(saved.version, 3);
-  assert.deepEqual(saved, { version: 3, ...data });
+  assert.equal(saved.version, 4);
+  assert.deepEqual(saved, { version: 4, ...data });
 });
 
 test("invalid snapshots, duplicate IDs, and invalid links are not written", () => {
@@ -1009,7 +1460,7 @@ test("ordinary model and evidence arrays with valid metrics save and load", () =
   assert.deepEqual(loaded.snapshot, data);
 });
 
-test("version-3 serialization round trip preserves all collections without assessments", () => {
+test("version-4 serialization round trip preserves all collections without assessments", () => {
   const data = snapshot({
     jobs: [jobRecord()],
     requirements: [requirementRecord()],
@@ -1025,11 +1476,14 @@ test("version-3 serialization round trip preserves all collections without asses
 
   assert.deepEqual(adapter.save(data), { status: "saved" });
   const envelopeData = JSON.parse(fake.values.get(storageKey));
-  assert.equal(envelopeData.version, 3);
+  assert.equal(envelopeData.version, 4);
   assert.deepEqual(Object.keys(envelopeData).sort(), [
     "achievementMappings",
     "achievementRecords",
+    "certificationRecords",
+    "educationRecords",
     "employmentRecords",
+    "import",
     "jobs",
     "legacyRequirements",
     "profile",
@@ -1041,7 +1495,7 @@ test("version-3 serialization round trip preserves all collections without asses
 });
 
 test("save does not delete the previous stored value before writing", () => {
-  const original = "prior stored value";
+  const original = stored(snapshot({ profile: null }));
   const fake = createFakeStorage(original);
   const result = createCareerStorage(fake).save(snapshot());
 
@@ -1051,7 +1505,7 @@ test("save does not delete the previous stored value before writing", () => {
 });
 
 test("a setItem failure preserves existing data and later save can retry", () => {
-  const original = "prior stored value";
+  const original = stored(snapshot());
   const fake = createFakeStorage(original);
   const adapter = createCareerStorage(fake);
   const data = snapshot();

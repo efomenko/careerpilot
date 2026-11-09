@@ -56,6 +56,20 @@ function assertInvalidField(result, field) {
   assert.ok(result.errors.some((error) => error.field === field));
 }
 
+test("Profile and Employment provenance contents must be JSON-compatible", () => {
+  const metadata = { id: "id", createdAt: timestamp };
+  const cycle = {}; cycle.self = cycle;
+  for (const provenance of [[undefined], [NaN], [-0], [9007199254740992], [cycle], [new Date()], [() => {}]]) {
+    assertInvalidField(validateCareerProfile(profileRecord({ provenance })), "provenance");
+    assertInvalidField(validateEmploymentRecord(employmentRecord({ provenance })), "provenance");
+    assert.throws(() => createCareerProfile(profileInput({ provenance }), metadata), TypeError);
+    assert.throws(() => createEmploymentRecord(employmentInput({ provenance }), metadata), TypeError);
+  }
+  const provenance = [{ excerpt: "source", nested: [null, 1, 1.5, true] }];
+  assert.equal(validateCareerProfile(createCareerProfile(profileInput({ provenance }), metadata)).valid, true);
+  assert.equal(validateEmploymentRecord(createEmploymentRecord(employmentInput({ provenance }), metadata)).valid, true);
+});
+
 test("validates a complete Career Profile", () => {
   assert.deepEqual(validateCareerProfile(profileRecord()), {
     valid: true,
@@ -111,6 +125,33 @@ test("rejects non-string items in profile skills", () => {
     validateCareerProfile(profileRecord({ skills: ["skill", 4] })),
     "skills[1]"
   );
+});
+
+test("accepts and validates provenance containers on profiles", () => {
+  assert.equal(validateCareerProfile(profileRecord({ provenance: [] })).valid, true);
+  assertInvalidField(
+    validateCareerProfile(profileRecord({ provenance: {} })),
+    "provenance"
+  );
+  assert.deepEqual(
+    createCareerProfile(profileInput(), { id: "profile-id", createdAt: timestamp }).provenance,
+    []
+  );
+});
+
+test("Profile and Employment constructors and validators agree on provenance", () => {
+  for (const provenance of [undefined, null, [], [{ excerpt: "source" }]]) {
+    const fields = provenance === undefined ? {} : { provenance };
+    const profile = createCareerProfile(profileInput(fields), { id: "p", createdAt: timestamp });
+    const employment = createEmploymentRecord(employmentInput(fields), { id: "e", createdAt: timestamp });
+    const expected = provenance === undefined ? [] : provenance;
+    assert.deepEqual(profile.provenance, expected);
+    assert.deepEqual(employment.provenance, expected);
+    assert.equal(validateCareerProfile(profile).valid, true);
+    assert.equal(validateEmploymentRecord(employment).valid, true);
+    assert.equal(validateCareerProfile(profileRecord(fields)).valid, true);
+    assert.equal(validateEmploymentRecord(employmentRecord(fields)).valid, true);
+  }
 });
 
 test("rejects invalid profile timestamps", () => {
@@ -207,6 +248,14 @@ test("accepts past employment with an unknown end date", () => {
   })).valid, true);
 });
 
+test("accepts unknown start and end dates represented by null", () => {
+  assert.equal(validateEmploymentRecord(employmentRecord({
+    startDate: null,
+    endDate: null,
+    isCurrent: false
+  })).valid, true);
+});
+
 test("accepts past employment with a known end date", () => {
   assert.equal(validateEmploymentRecord(employmentRecord({
     isCurrent: false,
@@ -219,6 +268,13 @@ test("rejects current employment with a non-null end date", () => {
     validateEmploymentRecord(employmentRecord({
       isCurrent: true,
       endDate: "2024-12-31"
+    })),
+    "endDate"
+  );
+  assertInvalidField(
+    validateEmploymentRecord(employmentRecord({
+      isCurrent: true,
+      endDate: { value: "2024", precision: "year" }
     })),
     "endDate"
   );
@@ -261,6 +317,68 @@ test("rejects an end date before the start date", () => {
     })),
     "endDate"
   );
+});
+
+test("accepts structured Employment dates at year, month, and day precision", () => {
+  for (const [value, precision] of [
+    ["2021", "year"],
+    ["2021-05", "month"],
+    ["2021-05-17", "day"]
+  ]) {
+    assert.equal(validateEmploymentRecord(employmentRecord({
+      startDate: { value, precision },
+      endDate: null
+    })).valid, true);
+  }
+});
+
+test("rejects malformed, mismatched, and year-zero structured Employment dates", () => {
+  for (const startDate of [
+    { value: "0000", precision: "year" },
+    { value: "2021-13", precision: "month" },
+    { value: "2021-02-29", precision: "day" },
+    { value: "2021-05", precision: "day" },
+    { value: "2021", precision: "month" },
+    { value: "2021", precision: "decade" },
+    { value: "2021", precision: "year", extra: true },
+    "0000-01-01"
+  ]) {
+    assertInvalidField(
+      validateEmploymentRecord(employmentRecord({ startDate })),
+      "startDate"
+    );
+  }
+});
+
+test("structured-date chronology rejects only a definite reversal", () => {
+  assertInvalidField(
+    validateEmploymentRecord(employmentRecord({
+      startDate: { value: "2021-06", precision: "month" },
+      endDate: { value: "2021-05-31", precision: "day" },
+      isCurrent: false
+    })),
+    "endDate"
+  );
+  assert.equal(validateEmploymentRecord(employmentRecord({
+    startDate: { value: "2021", precision: "year" },
+    endDate: { value: "2021-05", precision: "month" },
+    isCurrent: false
+  })).valid, true);
+});
+
+test("Employment construction normalizes legacy day strings and preserves structured dates", () => {
+  const record = createEmploymentRecord(employmentInput({
+    startDate: "2020-01-01",
+    endDate: { value: "2024-12", precision: "month" },
+    isCurrent: false
+  }), {
+    id: "employment-id",
+    createdAt: timestamp
+  });
+
+  assert.deepEqual(record.startDate, { value: "2020-01-01", precision: "day" });
+  assert.deepEqual(record.endDate, { value: "2024-12", precision: "month" });
+  assert.equal(validateEmploymentRecord(record).valid, true);
 });
 
 test("constructs a profile with the supplied ID and matching creation timestamps", () => {

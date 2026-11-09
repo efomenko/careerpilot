@@ -1,11 +1,13 @@
-const profileFields = ["fullName", "headline", "summary", "skills"];
+// Provenance may be absent, null, or an array; constructors default omissions to [].
+const profileFields = ["fullName", "headline", "summary", "skills", "provenance"];
 const employmentFields = [
   "employer",
   "roleTitle",
   "startDate",
   "endDate",
   "isCurrent",
-  "responsibilities"
+  "responsibilities",
+  "provenance"
 ];
 const profileRecordFields = [
   "id",
@@ -90,6 +92,141 @@ function isCalendarDate(value) {
   ];
 
   return day >= 1 && day <= daysInMonth[month - 1];
+}
+
+function dateInterval(value) {
+  if (typeof value === "string") {
+    const match = /^(\d{4})-\d{2}-\d{2}$/.exec(value);
+    return match && Number(match[1]) > 0 && isCalendarDate(value)
+      ? { start: value, end: value }
+      : undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (!isObject(value)) {
+    return undefined;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  const keys = Reflect.ownKeys(value);
+  if (
+    (prototype !== Object.prototype && prototype !== null)
+    || keys.length !== 2
+    || !keys.includes("value")
+    || !keys.includes("precision")
+    || keys.some((key) => typeof key !== "string")
+  ) {
+    return undefined;
+  }
+  const valueDescriptor = Object.getOwnPropertyDescriptor(value, "value");
+  const precisionDescriptor = Object.getOwnPropertyDescriptor(value, "precision");
+  if (
+    !valueDescriptor?.enumerable
+    || !("value" in valueDescriptor)
+    || !precisionDescriptor?.enumerable
+    || !("value" in precisionDescriptor)
+  ) {
+    return undefined;
+  }
+  const dateValue = valueDescriptor.value;
+  const precision = precisionDescriptor.value;
+  if (typeof dateValue !== "string" || typeof precision !== "string") {
+    return undefined;
+  }
+
+  const yearMatch = /^(\d{4})$/.exec(dateValue);
+  if (precision === "year" && yearMatch && Number(yearMatch[1]) > 0) {
+    return { start: `${dateValue}-01-01`, end: `${dateValue}-12-31` };
+  }
+
+  const monthMatch = /^(\d{4})-(\d{2})$/.exec(dateValue);
+  if (precision === "month" && monthMatch && Number(monthMatch[1]) > 0) {
+    const year = Number(monthMatch[1]);
+    const month = Number(monthMatch[2]);
+    if (month >= 1 && month <= 12) {
+      const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+      const daysInMonth = [
+        31,
+        leapYear ? 29 : 28,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31
+      ][month - 1];
+      return {
+        start: `${dateValue}-01`,
+        end: `${dateValue}-${String(daysInMonth).padStart(2, "0")}`
+      };
+    }
+  }
+
+  if (precision === "day") {
+    const dayMatch = /^(\d{4})-\d{2}-\d{2}$/.exec(dateValue);
+    if (dayMatch && Number(dayMatch[1]) > 0 && isCalendarDate(dateValue)) {
+      return { start: dateValue, end: dateValue };
+    }
+  }
+
+  return undefined;
+}
+
+function isValidEmploymentDate(value) {
+  return value === null || dateInterval(value) !== undefined;
+}
+
+function normalizeEmploymentDate(value) {
+  if (typeof value === "string") {
+    return { value, precision: "day" };
+  }
+  return value === null ? null : { ...value };
+}
+
+function addProvenanceErrors(value, errors) {
+  if (Object.hasOwn(value, "provenance") && value.provenance !== null
+    && (!Array.isArray(value.provenance) || !isJsonCompatibleProvenance(value.provenance))) {
+    errors.push({
+      field: "provenance",
+      message: "This field must be null or a JSON-compatible array."
+    });
+  }
+}
+
+// Provenance is opaque, but must survive JSON serialization without changing.
+export function isJsonCompatibleProvenance(value, active = new WeakSet()) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") {
+    return Number.isFinite(value) && !Object.is(value, -0)
+      && (!Number.isInteger(value) || Number.isSafeInteger(value));
+  }
+  if (typeof value !== "object" || active.has(value)) return false;
+  active.add(value);
+  try {
+    const array = Array.isArray(value);
+    const prototype = Object.getPrototypeOf(value);
+    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) return false;
+    const keys = Reflect.ownKeys(value);
+    const length = array ? Object.getOwnPropertyDescriptor(value, "length")?.value : 0;
+    if (array && (!Number.isSafeInteger(length) || keys.length !== length + 1)) return false;
+    for (const key of keys) {
+      if (array && key === "length") continue;
+      if (typeof key !== "string" || (array && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= length))) return false;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)
+        || !isJsonCompatibleProvenance(descriptor.value, active)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    active.delete(value);
+  }
 }
 
 function isUtcTimestamp(value) {
@@ -208,6 +345,7 @@ function validateProfileFields(value, errors) {
   addStringError(value, "headline", errors);
   addStringError(value, "summary", errors);
   addStringArrayErrors(value, "skills", errors);
+  addProvenanceErrors(value, errors);
 }
 
 function validateEmploymentFields(value, errors) {
@@ -217,12 +355,12 @@ function validateEmploymentFields(value, errors) {
   for (const field of ["startDate", "endDate"]) {
     if (!Object.hasOwn(value, field)) {
       errors.push({ field, message: "This field is required." });
-    } else if (field === "endDate" && value.endDate === null) {
+    } else if (value[field] === null) {
       continue;
-    } else if (!isCalendarDate(value[field])) {
+    } else if (!isValidEmploymentDate(value[field])) {
       errors.push({
         field,
-        message: "Use a valid calendar date in YYYY-MM-DD format."
+        message: "Use a valid structured date or null."
       });
     }
   }
@@ -234,13 +372,14 @@ function validateEmploymentFields(value, errors) {
   }
 
   addStringArrayErrors(value, "responsibilities", errors);
+  addProvenanceErrors(value, errors);
 
   if (
     typeof value.isCurrent === "boolean"
     && value.isCurrent
     && Object.hasOwn(value, "endDate")
     && value.endDate !== null
-    && isCalendarDate(value.endDate)
+    && isValidEmploymentDate(value.endDate)
   ) {
     errors.push({
       field: "endDate",
@@ -251,9 +390,9 @@ function validateEmploymentFields(value, errors) {
   if (
     Object.hasOwn(value, "startDate")
     && Object.hasOwn(value, "endDate")
-    && isCalendarDate(value.startDate)
-    && isCalendarDate(value.endDate)
-    && value.endDate < value.startDate
+    && dateInterval(value.startDate)
+    && dateInterval(value.endDate)
+    && dateInterval(value.endDate).end < dateInterval(value.startDate).start
   ) {
     errors.push({
       field: "endDate",
@@ -281,6 +420,7 @@ export function createCareerProfile(input, metadata) {
     headline: input.headline,
     summary: input.summary,
     skills: [...input.skills],
+    provenance: input.provenance === null ? null : [...(input.provenance ?? [])],
     createdAt: metadata.createdAt,
     updatedAt: metadata.createdAt
   };
@@ -303,10 +443,11 @@ export function createEmploymentRecord(input, metadata) {
     id: metadata.id,
     employer: input.employer,
     roleTitle: input.roleTitle,
-    startDate: input.startDate,
-    endDate: input.endDate,
+    startDate: normalizeEmploymentDate(input.startDate),
+    endDate: normalizeEmploymentDate(input.endDate),
     isCurrent: input.isCurrent,
     responsibilities: [...input.responsibilities],
+    provenance: input.provenance === null ? null : [...(input.provenance ?? [])],
     createdAt: metadata.createdAt,
     updatedAt: metadata.createdAt
   };

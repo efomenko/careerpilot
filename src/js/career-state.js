@@ -14,53 +14,15 @@ import { validateAchievementMappingRecord } from "./achievement-mapping-model.js
 import { calculateJobFitAssessment as calculateFitAssessment } from "./fit-assessment-helpers.js";
 
 function copyProfile(profile) {
-  return profile ? { ...profile, skills: [...profile.skills] } : null;
+  return profile ? copyNestedData(profile) : null;
 }
 
 function copyEmploymentRecord(record) {
-  return { ...record, responsibilities: [...record.responsibilities] };
+  return copyNestedData(record);
 }
 
-function copyNestedData(value, copies = new WeakMap()) {
-  if (Array.isArray(value)) {
-    if (copies.has(value)) {
-      return copies.get(value);
-    }
-
-    const copy = new Array(value.length);
-    copies.set(value, copy);
-    for (let index = 0; index < value.length; index += 1) {
-      if (Object.hasOwn(value, index)) {
-        copy[index] = copyNestedData(value[index], copies);
-      }
-    }
-    return copy;
-  }
-
-  if (value === null || typeof value !== "object") {
-    return value;
-  }
-
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
-    return value;
-  }
-
-  if (copies.has(value)) {
-    return copies.get(value);
-  }
-
-  const copy = Object.create(prototype);
-  copies.set(value, copy);
-  for (const key of Object.keys(value)) {
-    Object.defineProperty(copy, key, {
-      configurable: true,
-      enumerable: true,
-      writable: true,
-      value: copyNestedData(value[key], copies)
-    });
-  }
-  return copy;
+function copyNestedData(value) {
+  return copySnapshotValue(value);
 }
 
 function copyAchievementRecord(record) {
@@ -68,29 +30,31 @@ function copyAchievementRecord(record) {
 }
 
 function copyJobRecord(record) {
-  return { ...record };
+  return copyNestedData(record);
 }
 
-function copySnapshotValue(value, copies = new WeakMap(), path = "snapshot") {
+function copySnapshotValue(value, path = "snapshot", active = new WeakSet()) {
   if (
     value === null
-    || typeof value === "undefined"
     || typeof value === "string"
-    || typeof value === "number"
     || typeof value === "boolean"
-    || typeof value === "bigint"
-    || typeof value === "symbol"
   ) {
     return value;
   }
 
-  if (typeof value === "function") {
-    throw new TypeError(`${path} contains a function that cannot be safely copied.`);
+  if (typeof value === "number" && Number.isFinite(value)
+    && (!Object.is(value, -0) || path.startsWith("snapshot.legacyRequirements["))
+    && (!Number.isInteger(value) || Number.isSafeInteger(value))) {
+    return value;
+  }
+  if (typeof value !== "object") {
+    throw new TypeError(`${path} contains a value that cannot be faithfully represented in JSON.`);
+  }
+  if (active.has(value)) {
+    throw new TypeError(`${path} contains a cyclic reference.`);
   }
 
-  if (copies.has(value)) {
-    return copies.get(value);
-  }
+  active.add(value);
 
   let isArray;
   let prototype;
@@ -120,7 +84,9 @@ function copySnapshotValue(value, copies = new WeakMap(), path = "snapshot") {
     }
 
     const copy = new Array(length);
-    copies.set(value, copy);
+    if (keys.length !== length + 1) {
+      throw new TypeError(`${path} must be a dense array without extra properties.`);
+    }
     for (const key of keys) {
       if (key === "length") {
         continue;
@@ -143,17 +109,13 @@ function copySnapshotValue(value, copies = new WeakMap(), path = "snapshot") {
         throw new TypeError(`${path}[${key}] must be an enumerable data property.`);
       }
       Object.defineProperty(copy, key, {
-        ...descriptor,
-        value: copySnapshotValue(descriptor.value, copies, `${path}[${key}]`)
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: copySnapshotValue(descriptor.value, `${path}[${key}]`, active)
       });
     }
-    let lengthDescriptor;
-    try {
-      lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
-    } catch {
-      throw new TypeError(`${path} array length could not be inspected safely.`);
-    }
-    Object.defineProperty(copy, "length", lengthDescriptor);
+    active.delete(value);
     return copy;
   }
 
@@ -162,7 +124,6 @@ function copySnapshotValue(value, copies = new WeakMap(), path = "snapshot") {
   }
 
   const copy = Object.create(prototype);
-  copies.set(value, copy);
   for (const key of keys) {
     if (typeof key !== "string") {
       throw new TypeError(`${path} contains an unsupported symbol-keyed property.`);
@@ -177,11 +138,37 @@ function copySnapshotValue(value, copies = new WeakMap(), path = "snapshot") {
       throw new TypeError(`${path}.${key} must be an enumerable data property.`);
     }
     Object.defineProperty(copy, key, {
-      ...descriptor,
-      value: copySnapshotValue(descriptor.value, copies, `${path}.${key}`)
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: copySnapshotValue(descriptor.value, `${path}.${key}`, active)
     });
   }
+  active.delete(value);
   return copy;
+}
+
+function validateRecordWithProvenance(record, validator) {
+  const result = validator(record);
+  if (validator === validateAchievementRecord && result.valid) {
+    const visit = (value) => {
+      if (value === null || typeof value !== "object") {
+        return true;
+      }
+      if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) {
+        return false;
+      }
+      return Object.values(value).every(visit);
+    };
+    if (!visit(record.evidence)) {
+      return { valid: false, errors: [{ field: "evidence", message: "Evidence objects must be ordinary plain objects." }] };
+    }
+  }
+  return result;
+}
+
+function constructRecord(input, metadata, constructor) {
+  return constructor(copyNestedData(input), metadata);
 }
 
 function prepareSnapshotCopy(snapshot) {
@@ -212,9 +199,16 @@ function prepareSnapshotCopy(snapshot) {
     "jobs",
     "requirements",
     "legacyRequirements",
-    "achievementMappings"
+    "achievementMappings",
+    "educationRecords",
+    "certificationRecords",
+    "import"
   ];
-  const requiredFields = ["profile", "employmentRecords", "achievementRecords"];
+  const v4Fields = ["educationRecords", "certificationRecords", "import"];
+  const isV4 = v4Fields.some((field) => keys.includes(field));
+  const requiredFields = isV4
+    ? expectedFields
+    : ["profile", "employmentRecords", "achievementRecords"];
   for (const key of keys) {
     if (typeof key !== "string" || !expectedFields.includes(key)) {
       throw new TypeError(`Snapshot contains unexpected property "${String(key)}".`);
@@ -229,7 +223,9 @@ function prepareSnapshotCopy(snapshot) {
       throw new TypeError(`Snapshot property "${field}" could not be inspected safely.`);
     }
     if (!descriptor && !requiredFields.includes(field)) {
-      normalizedSnapshot[field] = [];
+      normalizedSnapshot[field] = field === "import"
+        ? { sessions: [], completedBatches: [], importReports: [] }
+        : [];
       continue;
     }
     if (!descriptor) {
@@ -241,13 +237,13 @@ function prepareSnapshotCopy(snapshot) {
     normalizedSnapshot[field] = descriptor.value;
   }
 
-  return copySnapshotValue(normalizedSnapshot);
+  return { snapshot: copySnapshotValue(normalizedSnapshot), isV4 };
 }
 
-function validateSnapshotRecords(snapshot) {
+function validateSnapshotRecords(snapshot, isV4) {
   const errors = [];
   if (snapshot.profile !== null) {
-    const result = validateCareerProfile(snapshot.profile);
+    const result = validateRecordWithProvenance(snapshot.profile, validateCareerProfile);
     if (!result.valid) {
       errors.push(...result.errors.map((error) => ({
         ...error,
@@ -266,7 +262,7 @@ function validateSnapshotRecords(snapshot) {
   } else {
     const employmentIds = new Set();
     snapshot.employmentRecords.forEach((record, index) => {
-      const result = validateEmploymentRecord(record);
+      const result = validateRecordWithProvenance(record, validateEmploymentRecord);
       if (!result.valid) {
         errors.push(...result.errors.map((error) => ({
           ...error,
@@ -274,6 +270,18 @@ function validateSnapshotRecords(snapshot) {
           recordType: "employment",
           recordId: record?.id
         })));
+      }
+      if (isV4 && record && typeof record === "object") {
+        for (const field of ["startDate", "endDate"]) {
+          if (typeof record[field] === "string") {
+            errors.push({
+              field: `employmentRecords[${index}].${field}`,
+              message: "Must be null or a valid structured date.",
+              recordType: "employment",
+              recordId: record.id
+            });
+          }
+        }
       }
       if (record && typeof record.id === "string") {
         if (employmentIds.has(record.id)) {
@@ -299,7 +307,7 @@ function validateSnapshotRecords(snapshot) {
   } else {
     const achievementIds = new Set();
     snapshot.achievementRecords.forEach((record, index) => {
-      const result = validateAchievementRecord(record);
+      const result = validateRecordWithProvenance(record, validateAchievementRecord);
       if (!result.valid) {
         errors.push(...result.errors.map((error) => ({
           ...error,
@@ -392,6 +400,7 @@ function validateSnapshotRecords(snapshot) {
       continue;
     }
 
+    const recordIds = new Set();
     snapshot[field].forEach((record, index) => {
       if (!isPlainObject(record)) {
         errors.push({
@@ -399,6 +408,36 @@ function validateSnapshotRecords(snapshot) {
           message: `Each ${recordType} must be a plain object.`,
           recordType
         });
+      } else if (field === "requirements") {
+        const result = validateRequirementRecord(record);
+        if (!result.valid) {
+          errors.push(...result.errors.map((error) => ({
+            ...error,
+            field: `requirements[${index}].${error.field}`,
+            recordType,
+            recordId: record.id
+          })));
+        }
+        if (typeof record.id === "string") {
+          if (recordIds.has(record.id)) {
+            errors.push({
+              field: `requirements[${index}].id`,
+              message: `Duplicate requirement ID "${record.id}".`,
+              recordType,
+              recordId: record.id
+            });
+          }
+          recordIds.add(record.id);
+        }
+        if (result.valid && Array.isArray(snapshot.jobs)
+          && !snapshot.jobs.some((job) => job?.id === record.jobId)) {
+          errors.push({
+            field: `requirements[${index}].jobId`,
+            message: `Job "${record.jobId}" does not exist.`,
+            recordType,
+            recordId: record.id
+          });
+        }
       }
     });
   }
@@ -411,8 +450,33 @@ function validateSnapshotRecords(snapshot) {
     });
   }
 
+  for (const field of ["educationRecords", "certificationRecords"]) {
+    if (!Array.isArray(snapshot[field])) {
+      errors.push({ field, message: "Must be an array." });
+    }
+  }
+
+  const importFields = ["sessions", "completedBatches", "importReports"];
+  if (!isPlainObject(snapshot.import)) {
+    errors.push({ field: "import", message: "Must be a plain object." });
+  } else {
+    for (const field of Object.keys(snapshot.import)) {
+      if (!importFields.includes(field)) {
+        errors.push({ field: `import.${field}`, message: "Unexpected property." });
+      }
+    }
+    for (const field of importFields) {
+      if (!Object.hasOwn(snapshot.import, field) || !Array.isArray(snapshot.import[field])) {
+        errors.push({ field: `import.${field}`, message: "Must be an array." });
+      }
+    }
+  }
+
   if (errors.length > 0) {
-    const error = new TypeError("Career snapshot is invalid.");
+    const message = !isV4 && errors.some((entry) => entry.recordType === "requirement")
+      ? "Career snapshot is invalid. Direct legacy snapshots require valid, linked Requirements; use storage migration for versioned data."
+      : "Career snapshot is invalid.";
+    const error = new TypeError(message);
     error.errors = errors;
     throw error;
   }
@@ -528,7 +592,7 @@ function createJobStateError(code, message) {
 }
 
 function validateRecord(record, validator, recordName) {
-  const result = validator(record);
+  const result = validateRecordWithProvenance(record, validator);
 
   if (!result.valid) {
     throwValidationError(recordName, result.errors);
@@ -551,6 +615,8 @@ function assertEditableInput(input, reservedFields, recordName) {
 
 /**
  * Creates an isolated, in-memory CareerPilot state.
+ * Direct unversioned snapshots must already contain v4-valid Requirements;
+ * versioned historical data should be migrated by career-storage instead.
  *
  * Returned API:
  * - createProfile(input, metadata): create the single profile using
@@ -610,6 +676,9 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
   let requirements = [];
   let legacyRequirements = [];
   let achievementMappings = [];
+  let educationRecords = [];
+  let certificationRecords = [];
+  let importData = { sessions: [], completedBatches: [], importReports: [] };
   let isFresh = true;
 
   function reportMutationError(error) {
@@ -664,8 +733,28 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
         throw new Error("A Career snapshot can only be restored into a fresh state.");
       }
 
-      const replacement = prepareSnapshotCopy(snapshot);
-      validateSnapshotRecords(replacement);
+      const prepared = prepareSnapshotCopy(snapshot);
+      const replacement = prepared.snapshot;
+      validateSnapshotRecords(replacement, prepared.isV4);
+
+      if (!prepared.isV4) {
+        if (replacement.profile && !Object.hasOwn(replacement.profile, "provenance")) {
+          replacement.profile = { ...replacement.profile, provenance: [] };
+        }
+        replacement.employmentRecords = replacement.employmentRecords.map((record) => ({
+          ...record,
+          startDate: typeof record.startDate === "string"
+            ? { value: record.startDate, precision: "day" }
+            : record.startDate,
+          endDate: typeof record.endDate === "string"
+            ? { value: record.endDate, precision: "day" }
+            : record.endDate,
+          ...(!Object.hasOwn(record, "provenance") ? { provenance: [] } : {})
+        }));
+        replacement.achievementRecords = replacement.achievementRecords.map((record) =>
+          Object.hasOwn(record, "provenance") ? record : { ...record, provenance: [] }
+        );
+      }
 
       profile = replacement.profile;
       employmentRecords = replacement.employmentRecords;
@@ -674,6 +763,9 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       requirements = replacement.requirements;
       legacyRequirements = replacement.legacyRequirements;
       achievementMappings = replacement.achievementMappings;
+      educationRecords = replacement.educationRecords;
+      certificationRecords = replacement.certificationRecords;
+      importData = replacement.import;
       isFresh = false;
     },
 
@@ -685,8 +777,11 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
         jobs,
         requirements,
         legacyRequirements,
-        achievementMappings
-      });
+        achievementMappings,
+        educationRecords,
+        certificationRecords,
+        import: importData
+      }).snapshot;
     },
 
     createProfile(input, metadata) {
@@ -694,9 +789,9 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
         throw new Error("A Career Profile already exists.");
       }
 
-      const newProfile = createCareerProfile(input, metadata);
+      const newProfile = constructRecord(input, metadata, createCareerProfile);
       validateRecord(newProfile, validateCareerProfile, "Career Profile");
-      profile = newProfile;
+      profile = copyProfile(newProfile);
       const result = copyProfile(profile);
       notifyMutation();
       return result;
@@ -708,11 +803,15 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       }
 
       assertEditableInput(input, ["id", "createdAt", "updatedAt"], "Career Profile");
+      input = copyNestedData(input);
       const updatedProfile = {
         ...input,
         id: profile.id,
         createdAt: profile.createdAt,
-        updatedAt
+        updatedAt,
+        ...(!Object.hasOwn(input, "provenance") && Object.hasOwn(profile, "provenance")
+          ? { provenance: profile.provenance }
+          : {})
       };
       validateRecord(updatedProfile, validateCareerProfile, "Career Profile");
       profile = copyProfile(updatedProfile);
@@ -722,7 +821,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
     },
 
     addEmploymentRecord(input, metadata) {
-      const newRecord = createEmploymentRecord(input, metadata);
+      const newRecord = constructRecord(input, metadata, createEmploymentRecord);
       validateRecord(newRecord, validateEmploymentRecord, "Employment History record");
 
       if (employmentRecords.some((record) => record.id === newRecord.id)) {
@@ -743,13 +842,26 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       }
 
       assertEditableInput(input, ["id", "createdAt", "updatedAt"], "Employment History");
+      input = copyNestedData(input);
       const existingRecord = employmentRecords[recordIndex];
-      const updatedRecord = {
-        ...input,
+      const hasProvenance = Object.hasOwn(input, "provenance") || Object.hasOwn(existingRecord, "provenance");
+      const provenance = Object.hasOwn(input, "provenance") ? input.provenance : existingRecord.provenance;
+      const constructionInput = { ...input };
+      if (provenance === null || !hasProvenance) {
+        delete constructionInput.provenance;
+      } else {
+        constructionInput.provenance = provenance;
+      }
+      const updatedRecord = createEmploymentRecord(constructionInput, {
         id: existingRecord.id,
-        createdAt: existingRecord.createdAt,
-        updatedAt
-      };
+        createdAt: existingRecord.createdAt
+      });
+      if (hasProvenance) {
+        updatedRecord.provenance = provenance;
+      } else {
+        delete updatedRecord.provenance;
+      }
+      updatedRecord.updatedAt = updatedAt;
       validateRecord(updatedRecord, validateEmploymentRecord, "Employment History record");
       employmentRecords[recordIndex] = copyEmploymentRecord(updatedRecord);
       const result = copyEmploymentRecord(employmentRecords[recordIndex]);
@@ -786,7 +898,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
     },
 
     addAchievementRecord(input, metadata) {
-      const newRecord = createAchievementRecord(input, metadata);
+      const newRecord = constructRecord(input, metadata, createAchievementRecord);
       validateRecord(newRecord, validateAchievementRecord, "Achievement record");
 
       if (achievementRecords.some((record) => record.id === newRecord.id)) {
@@ -812,11 +924,23 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
         ["id", "createdAt", "updatedAt", "verificationStatus"],
         "Achievement"
       );
+      input = copyNestedData(input);
       const existingRecord = achievementRecords[recordIndex];
-      const updatedRecord = createAchievementRecord(input, {
+      const constructionInput = { ...input };
+      if (constructionInput.provenance === null) {
+        delete constructionInput.provenance;
+      }
+      const updatedRecord = createAchievementRecord(constructionInput, {
         id: existingRecord.id,
         createdAt: existingRecord.createdAt
       });
+      if (Object.hasOwn(input, "provenance")) {
+        updatedRecord.provenance = input.provenance;
+      } else if (Object.hasOwn(existingRecord, "provenance")) {
+        updatedRecord.provenance = copyNestedData(existingRecord.provenance);
+      } else {
+        delete updatedRecord.provenance;
+      }
       updatedRecord.updatedAt = updatedAt;
       const contentChanged = hasAchievementContentChanged(existingRecord, updatedRecord);
       updatedRecord.verificationStatus = contentChanged
@@ -905,6 +1029,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
           "Job updates require an object of Job fields."
         );
       }
+      updates = copyNestedData(updates);
 
       for (const field of ["id", "createdAt"]) {
         if (Object.hasOwn(updates, field)) {
@@ -1013,6 +1138,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
     },
 
     createRequirement(record) {
+      record = copyNestedData(record);
       const result = validateRequirementRecord(record);
       if (!result.valid) {
         throwJobValidationError("Requirement record", result.errors);
@@ -1030,9 +1156,9 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
         );
       }
 
-      const newRequirement = { ...record };
+      const newRequirement = copyNestedData(record);
       requirements.push(newRequirement);
-      const createdRequirement = { ...newRequirement };
+      const createdRequirement = copyNestedData(newRequirement);
       notifyMutation();
       return createdRequirement;
     },
@@ -1057,6 +1183,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
           "Requirement updates require an object of Requirement fields."
         );
       }
+      updates = copyNestedData(updates);
 
       for (const field of ["id", "jobId", "createdAt"]) {
         if (Object.hasOwn(updates, field)) {
@@ -1084,7 +1211,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
         !Object.is(existingRequirement[field], updates[field])
       );
       if (!hasChanges) {
-        return { ...existingRequirement };
+        return copyNestedData(existingRequirement);
       }
       if (!Object.hasOwn(updates, "updatedAt")) {
         throw createJobStateError(
@@ -1103,7 +1230,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
       }
 
       requirements[requirementIndex] = { ...updatedRequirement };
-      const updatedCopy = { ...requirements[requirementIndex] };
+      const updatedCopy = copyNestedData(requirements[requirementIndex]);
       notifyMutation();
       return updatedCopy;
     },
@@ -1132,6 +1259,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
     },
 
     createAchievementMapping(record) {
+      record = copyNestedData(record);
       const result = validateAchievementMappingRecord(record);
       if (!result.valid) {
         throwJobValidationError("Achievement Mapping record", result.errors);
@@ -1164,9 +1292,9 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
         );
       }
 
-      const newMapping = { ...record };
+      const newMapping = copyNestedData(record);
       achievementMappings.push(newMapping);
-      const createdMapping = { ...newMapping };
+      const createdMapping = copyNestedData(newMapping);
       notifyMutation();
       return createdMapping;
     },
@@ -1203,7 +1331,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
     getRequirements(jobId) {
       return requirements
         .filter((requirement) => requirement.jobId === jobId)
-        .map((requirement) => ({ ...requirement }));
+        .map((requirement) => copyNestedData(requirement));
     },
 
     calculateJobFitAssessment(jobId) {
@@ -1232,13 +1360,13 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
     getAchievementMappingsForRequirement(requirementId) {
       return achievementMappings
         .filter((mapping) => mapping.requirementId === requirementId)
-        .map((mapping) => ({ ...mapping }));
+        .map((mapping) => copyNestedData(mapping));
     },
 
     getAchievementMappingsForAchievement(achievementId) {
       return achievementMappings
         .filter((mapping) => mapping.achievementId === achievementId)
-        .map((mapping) => ({ ...mapping }));
+        .map((mapping) => copyNestedData(mapping));
     }
   };
 

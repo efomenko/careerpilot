@@ -27,6 +27,7 @@ function achievementRecord(overrides = {}) {
     metrics: [],
     evidence: [],
     employmentId: null,
+    provenance: [],
     verificationStatus: "unverified",
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -38,6 +39,20 @@ function assertInvalidField(result, field) {
   assert.equal(result.valid, false);
   assert.ok(result.errors.some((error) => error.field === field));
 }
+
+test("Achievement provenance contents must be JSON-compatible", () => {
+  const cycle = {}; cycle.self = cycle;
+  for (const provenance of [[undefined], [NaN], [-0], [9007199254740992], [cycle], [new Date()], [() => {}]]) {
+    assertInvalidField(validateAchievementRecord(achievementRecord({ provenance })), "provenance");
+    assert.throws(() => createAchievementRecord(achievementInput({ provenance }), {
+      id: "id", createdAt: timestamp
+    }), TypeError);
+  }
+  const provenance = [{ excerpt: "source", nested: [null, 1, 1.5, true] }];
+  assert.equal(validateAchievementRecord(createAchievementRecord(achievementInput({ provenance }), {
+    id: "id", createdAt: timestamp
+  })).valid, true);
+});
 
 test("constructs and validates a complete achievement", () => {
   const record = createAchievementRecord(achievementInput({
@@ -65,10 +80,49 @@ test("constructs and validates a complete achievement", () => {
   assert.equal(validateAchievementRecord(record).valid, true);
 });
 
+test("Achievement constructors and validators agree on provenance", () => {
+  for (const provenance of [undefined, null, [], [{ excerpt: "source" }]]) {
+    const fields = provenance === undefined ? {} : { provenance };
+    const record = createAchievementRecord(achievementInput(fields), {
+      id: "achievement-id", createdAt: timestamp
+    });
+    assert.deepEqual(record.provenance, provenance === undefined ? [] : provenance);
+    assert.equal(validateAchievementRecord(record).valid, true);
+    const supplied = achievementRecord(fields);
+    if (provenance === undefined) {
+      delete supplied.provenance;
+    }
+    assert.equal(validateAchievementRecord(supplied).valid, true);
+  }
+});
+
 test("defaults omitted optional fields and arrays", () => {
   const record = createAchievementRecord(achievementInput(), {
     id: "achievement-id",
     createdAt: timestamp
+  });
+
+  test("accepts provenance arrays and rejects non-array provenance values", () => {
+    const provenance = [{ source: "cv", excerpts: ["text"] }];
+    const record = createAchievementRecord(achievementInput({ provenance }), {
+      id: "achievement-id",
+      createdAt: timestamp
+    });
+
+    assert.deepEqual(record.provenance, provenance);
+    assert.notEqual(record.provenance, provenance);
+    assertInvalidField(
+      validateAchievementRecord(achievementRecord({ provenance: {} })),
+      "provenance"
+    );
+    assert.throws(
+      () => createAchievementRecord(achievementInput({ provenance: "invalid" }), {
+        id: "achievement-id",
+        createdAt: timestamp
+      }),
+      (error) => error instanceof TypeError
+        && error.errors.some(({ field }) => field === "provenance")
+    );
   });
 
   assert.deepEqual(record, achievementRecord());

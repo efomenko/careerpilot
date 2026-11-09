@@ -4,6 +4,7 @@ import { createCareerStorage } from "./career-storage.js";
 const loadStatuses = new Set([
   "missing",
   "loaded",
+  "protected",
   "corrupt",
   "unsupported-version",
   "unavailable"
@@ -49,10 +50,71 @@ function messageForSaveStatus(status) {
     case "write-failed":
       return "This change is available in this session but could not be saved.";
     case "writes-disabled":
-      return "Saving is disabled because stored data could not be safely replaced.";
+      return "Saving is disabled. Changes are available only in this session.";
     default:
       return "The change is available in this session but could not be saved.";
   }
+}
+
+const mutationMethods = new Set([
+  "createProfile", "updateProfile", "addEmploymentRecord", "updateEmploymentRecord",
+  "deleteEmploymentRecord", "addAchievementRecord", "updateAchievementRecord",
+  "updateAchievementVerificationStatus", "deleteAchievementRecord", "createJob",
+  "updateJob", "archiveJob", "reactivateJob", "deleteJob", "createRequirement",
+  "updateRequirement", "deleteRequirement", "createAchievementMapping", "deleteAchievementMapping",
+  "restoreSnapshot"
+]);
+
+const trackedStates = new WeakSet();
+
+function wrapMutationState(
+  persistence,
+  saveRestoredSnapshot,
+  runTrackedMutation = (operation) => persistence.runMutation(operation)
+) {
+  if (trackedStates.has(persistence.state)) {
+    return persistence.state;
+  }
+  const state = new Proxy(persistence.state, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (!mutationMethods.has(property)) {
+        return value;
+      }
+      return (...args) => runTrackedMutation(() => {
+        const result = value.apply(target, args);
+        if (property === "restoreSnapshot" && saveRestoredSnapshot) {
+          saveRestoredSnapshot();
+        }
+        return result;
+      });
+    }
+  });
+  trackedStates.add(state);
+  return state;
+}
+
+export function createPersistenceMutationState(persistence) {
+  return wrapMutationState(persistence);
+}
+
+export function createPersistenceNotifications(notifications, persistence) {
+  return {
+    ...notifications,
+    show(type, message) {
+      if (type === "success") {
+        const outcome = persistence.getMutationSaveOutcome();
+        if (outcome === "unchanged") {
+          return;
+        }
+        if (outcome !== "saved") {
+          notifications.show("error", "Saving could not be completed. Check the persistence status before retrying.");
+          return;
+        }
+      }
+      notifications.show(type, message);
+    }
+  };
 }
 
 /**
@@ -83,6 +145,18 @@ export function createCareerPersistence(
     persistentWarning: null,
     transientWarning: null
   };
+  let mutationSaveOutcome = null;
+  let activeMutation = null;
+
+  function recordMutationOutcome(outcome) {
+    mutationSaveOutcome = outcome;
+    // Explicit wrappers summarize attempts, while tracked mutations retain their own attempt.
+    for (let frame = activeMutation; frame; frame = frame.parent) {
+      if (frame === activeMutation || frame.aggregate) {
+        frame.outcome = outcome;
+      }
+    }
+  }
 
   function reportUnexpected(error) {
     if (onUnexpectedError) {
@@ -138,13 +212,14 @@ export function createCareerPersistence(
   }
 
   function setUnexpectedWarning(error) {
-    reportUnexpected(error);
+    recordMutationOutcome("unexpected-error");
     updateStatus({
       transientWarning: {
         kind: "unexpected-error",
         message: "A change is available in this session but could not be saved."
       }
     });
+    reportUnexpected(error);
   }
 
   let adapter = null;
@@ -184,6 +259,7 @@ export function createCareerPersistence(
 
   function saveAfterMutation(snapshotAccessor) {
     if (adapterUnavailable || !adapter) {
+      recordMutationOutcome("unavailable");
       return;
     }
 
@@ -193,7 +269,7 @@ export function createCareerPersistence(
       if (!result || !saveStatuses.has(result.status)) {
         throw new Error("Storage returned an unknown save result.");
       }
-
+      recordMutationOutcome(result.status);
       switch (result.status) {
         case "saved":
           updateStatus({
@@ -209,7 +285,7 @@ export function createCareerPersistence(
               && status.persistentWarning.kind !== "unavailable"
               ? status.persistentWarning
               : {
-                kind: "corrupt",
+                kind: "read-only",
                 message: "Saving is disabled because stored data could not be safely replaced."
               },
             transientWarning: {
@@ -248,7 +324,24 @@ export function createCareerPersistence(
   if (loadResult) {
     switch (loadResult.status) {
       case "missing":
+        break;
       case "loaded":
+        if (loadResult.writesDisabled) {
+          updateStatus({
+            persistentWarning: {
+              kind: "read-only",
+              message: "Existing data remains available, but changes cannot be saved because the stored data cannot be safely rewritten."
+            }
+          });
+        }
+        break;
+      case "protected":
+        updateStatus({
+          persistentWarning: {
+            kind: "read-only",
+            message: "Stored data contains numbers that cannot be read without loss. It has not been loaded or replaced, and changes cannot be saved."
+          }
+        });
         break;
       case "corrupt":
         updateStatus({
@@ -267,10 +360,13 @@ export function createCareerPersistence(
         });
         break;
       case "unavailable":
+        // An unread snapshot cannot safely be replaced by this in-memory state.
+        // Recovery requires a new initialization; this session remains read-only.
+        adapterUnavailable = true;
         updateStatus({
           persistentWarning: {
             kind: "unavailable",
-            message: "Storage is unavailable. Changes will remain only in this session."
+            message: "Stored data could not be read. Saving is disabled for this session; changes remain only in memory. Reload when storage is available to recover existing data."
           }
         });
         break;
@@ -295,10 +391,38 @@ export function createCareerPersistence(
     }
   }
 
-  return {
+  function runMutation(operation, aggregate) {
+    const current = { outcome: null, parent: activeMutation, aggregate };
+    activeMutation = current;
+    mutationSaveOutcome = null;
+    try {
+      const result = operation();
+      if (current.outcome === null) {
+        current.outcome = "unchanged";
+      }
+      return result;
+    } finally {
+      activeMutation = current.parent;
+      mutationSaveOutcome = current.outcome;
+    }
+  }
+
+  const persistence = {
     state,
+    runMutation(operation) {
+      return runMutation(operation, true);
+    },
+    getMutationSaveOutcome() {
+      return mutationSaveOutcome;
+    },
     getStatus() {
       return copyStatus(status);
     }
   };
+  persistence.state = wrapMutationState(
+    persistence,
+    () => saveAfterMutation(() => state.getSnapshot()),
+    (operation) => runMutation(operation, false)
+  );
+  return persistence;
 }

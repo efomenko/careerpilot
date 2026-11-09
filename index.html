@@ -429,6 +429,12 @@
 
               <div class="profile-field">
                 <label for="employment-start-date">Start date <span aria-hidden="true">*</span></label>
+                <label for="employment-start-date-precision">Start date precision</label>
+                <select id="employment-start-date-precision" name="startDatePrecision">
+                  <option value="day">Day</option>
+                  <option value="month">Month</option>
+                  <option value="year">Year</option>
+                </select>
                 <input
                   id="employment-start-date"
                   name="startDate"
@@ -441,14 +447,19 @@
 
               <div class="profile-field">
                 <label for="employment-end-date">End date</label>
+                <label for="employment-end-date-precision">End date precision</label>
+                <select id="employment-end-date-precision" name="endDatePrecision">
+                  <option value="day">Day</option>
+                  <option value="month">Month</option>
+                  <option value="year">Year</option>
+                </select>
                 <input
                   id="employment-end-date"
                   name="endDate"
-                  type="text"
-                  placeholder="YYYY-MM-DD"
+                  type="date"
                   aria-describedby="employment-end-date-help employment-end-date-error"
                 >
-                <p class="profile-field-help" id="employment-end-date-help">Enter a date as YYYY-MM-DD, or leave blank if the end date is unknown.</p>
+                <p class="profile-field-help" id="employment-end-date-help">Choose day, month, or year precision. Leave blank if the end date is unknown.</p>
                 <p class="profile-field-error" id="employment-end-date-error" hidden></p>
               </div>
 

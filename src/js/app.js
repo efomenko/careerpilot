@@ -1,5 +1,9 @@
 
-import { createCareerPersistence } from "./career-persistence.js";
+import {
+  createCareerPersistence,
+  createPersistenceMutationState,
+  createPersistenceNotifications
+} from "./career-persistence.js";
 import { createDialogManager } from "./dialogs.js";
 import { createNavigationController } from "./navigation.js";
 import { createNotifications } from "./notifications.js";
@@ -53,12 +57,13 @@ const careerPersistence = createCareerPersistence(browserStorage, {
   onStatusChange: renderPersistenceStatus,
   onUnexpectedError: logPersistenceError
 });
-const careerState = careerPersistence.state;
+const careerState = createPersistenceMutationState(careerPersistence);
 renderPersistenceStatus(careerPersistence.getStatus());
 
-const notifications = createNotifications({
+const notificationRegion = createNotifications({
   region: document.querySelector("#ordinary-notification")
 });
+const notifications = createPersistenceNotifications(notificationRegion, careerPersistence);
 const dialogManager = createDialogManager({
   discardDialog: document.querySelector("#discard-confirmation"),
   continueEditingButton: document.querySelector("#continue-editing"),
@@ -152,6 +157,10 @@ const employmentControls = {
   endDate: document.querySelector("#employment-end-date"),
   isCurrent: document.querySelector("#employment-is-current"),
   responsibilities: document.querySelector("#employment-responsibilities")
+};
+const employmentDatePrecisionControls = {
+  startDate: document.querySelector("#employment-start-date-precision"),
+  endDate: document.querySelector("#employment-end-date-precision")
 };
 const employmentFieldErrors = {
   employer: document.querySelector("#employment-employer-error"),
@@ -713,20 +722,68 @@ function clearEmploymentFieldErrors() {
 
 function resetEmploymentForm() {
   employmentForm.reset();
+  setEmploymentDatePrecision("startDate", "day");
+  setEmploymentDatePrecision("endDate", "day");
   editingEmploymentId = null;
   employmentFormTitle.textContent = "Add employment";
   employmentSubmit.textContent = "Add employment";
   employmentControls.endDate.disabled = false;
+  employmentDatePrecisionControls.endDate.disabled = false;
   clearEmploymentFieldErrors();
+}
+
+function setEmploymentDatePrecision(field, precision) {
+  const control = employmentControls[field];
+  const precisionControl = employmentDatePrecisionControls[field];
+  precisionControl.value = precision;
+  control.type = precision === "year"
+    ? "text"
+    : precision === "month" ? "month" : "date";
+  control.placeholder = precision === "year" ? "YYYY" : "";
+  if (precision === "year") {
+    control.inputMode = "numeric";
+    control.pattern = "\\d{4}";
+  } else {
+    control.removeAttribute("inputmode");
+    control.removeAttribute("pattern");
+  }
+}
+
+function formatEmploymentDate(date) {
+  if (date === null || date === undefined) {
+    return "End date unknown";
+  }
+
+  const value = typeof date === "string" ? date : date.value;
+  const precision = typeof date === "string" ? "day" : date.precision;
+  return precision === "day" ? value : `${value} (${precision})`;
+}
+
+function readEmploymentDate(field) {
+  const value = employmentControls[field].value;
+  if (value === "") {
+    return null;
+  }
+  return {
+    value,
+    precision: employmentDatePrecisionControls[field].value
+  };
 }
 
 function populateEmploymentForm(record) {
   employmentControls.employer.value = record?.employer ?? "";
   employmentControls.roleTitle.value = record?.roleTitle ?? "";
-  employmentControls.startDate.value = record?.startDate ?? "";
-  employmentControls.endDate.value = record?.endDate ?? "";
+  for (const field of ["startDate", "endDate"]) {
+    const date = record?.[field];
+    const precision = date && typeof date === "object" ? date.precision : "day";
+    setEmploymentDatePrecision(field, precision);
+    employmentControls[field].value = date && typeof date === "object"
+      ? date.value
+      : date ?? "";
+  }
   employmentControls.isCurrent.checked = record?.isCurrent ?? false;
   employmentControls.endDate.disabled = employmentControls.isCurrent.checked;
+  employmentDatePrecisionControls.endDate.disabled = employmentControls.isCurrent.checked;
   employmentControls.responsibilities.value = record?.responsibilities.join("\n") ?? "";
   employmentFormTitle.textContent = record
     ? `Edit ${record.roleTitle}`
@@ -736,9 +793,13 @@ function populateEmploymentForm(record) {
 
 function getEmploymentFormSnapshot() {
   return JSON.stringify(
-    employmentFields.map((field) => field === "isCurrent"
-      ? employmentControls[field].checked
-      : employmentControls[field].value)
+    [
+      ...employmentFields.map((field) => field === "isCurrent"
+        ? employmentControls[field].checked
+        : employmentControls[field].value),
+      employmentDatePrecisionControls.startDate.value,
+      employmentDatePrecisionControls.endDate.value
+    ]
   );
 }
 
@@ -789,8 +850,8 @@ function renderEmploymentRecords() {
     dates.className = "employment-record-dates";
     const endDate = record.isCurrent
       ? "Present"
-      : record.endDate || "End date unknown";
-    dates.textContent = `${record.startDate} – ${endDate}`;
+      : formatEmploymentDate(record.endDate);
+    dates.textContent = `${formatEmploymentDate(record.startDate)} – ${endDate}`;
 
     article.append(heading, employer, dates);
 
@@ -2014,10 +2075,10 @@ function readEmploymentForm() {
   return {
     employer: employmentControls.employer.value,
     roleTitle: employmentControls.roleTitle.value,
-    startDate: employmentControls.startDate.value,
+    startDate: readEmploymentDate("startDate"),
     endDate: employmentControls.isCurrent.checked
       ? null
-      : employmentControls.endDate.value || null,
+      : readEmploymentDate("endDate"),
     isCurrent: employmentControls.isCurrent.checked,
     responsibilities: employmentControls.responsibilities.value
       .split(/\r?\n/)
@@ -2033,7 +2094,7 @@ function saveEmploymentRecord(event) {
   const input = readEmploymentForm();
   const employerRequired = validateRequired(input.employer, "an employer");
   const roleRequired = validateRequired(input.roleTitle, "a role title");
-  const startDateRequired = validateRequired(input.startDate, "a start date");
+  const startDateRequired = validateRequired(input.startDate?.value ?? "", "a start date");
 
   [
     ["employer", employerRequired],
@@ -2889,9 +2950,20 @@ employmentForm.addEventListener("input", (event) => {
 });
 employmentControls.isCurrent.addEventListener("change", () => {
   employmentControls.endDate.disabled = employmentControls.isCurrent.checked;
+  employmentDatePrecisionControls.endDate.disabled = employmentControls.isCurrent.checked;
   clearFieldError(employmentControls.endDate, employmentFieldErrors.endDate);
   clearFieldError(employmentControls.isCurrent, employmentFieldErrors.isCurrent);
 });
+for (const field of ["startDate", "endDate"]) {
+  employmentDatePrecisionControls[field].addEventListener("change", () => {
+    setEmploymentDatePrecision(
+      field,
+      employmentDatePrecisionControls[field].value
+    );
+    employmentControls[field].value = "";
+    clearFieldError(employmentControls[field], employmentFieldErrors[field]);
+  });
+}
 employmentCancel.addEventListener("click", () => {
   dialogManager.requestClose();
 });

@@ -1,4 +1,5 @@
 import {
+  isJsonCompatibleProvenance,
   validateCareerProfile,
   validateEmploymentRecord
 } from "./career-model.js";
@@ -7,7 +8,7 @@ import { validateJobRecord } from "./job-model.js";
 import { validateRequirementRecord } from "./requirement-model.js";
 
 const STORAGE_KEY = "careerpilot.state";
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const v1SnapshotFields = ["profile", "employmentRecords", "achievementRecords"];
 const v2SnapshotFields = [
   ...v1SnapshotFields,
@@ -15,11 +16,34 @@ const v2SnapshotFields = [
   "requirements",
   "achievementMappings"
 ];
-const snapshotFields = [
+const v3SnapshotFields = [
   ...v2SnapshotFields.slice(0, -1),
   "legacyRequirements",
   "achievementMappings"
 ];
+const v4SnapshotFields = [
+  ...v3SnapshotFields,
+  "educationRecords",
+  "certificationRecords",
+  "import"
+];
+const importContainerFields = ["sessions", "completedBatches", "importReports"];
+
+function snapshotFieldsForVersion(version) {
+  if (version === 1) {
+    return v1SnapshotFields;
+  }
+  if (version === 2) {
+    return v2SnapshotFields;
+  }
+  if (version === 3) {
+    return v3SnapshotFields;
+  }
+  if (version === 4) {
+    return v4SnapshotFields;
+  }
+  return [];
+}
 
 function emptySnapshot() {
   return {
@@ -29,7 +53,14 @@ function emptySnapshot() {
     jobs: [],
     requirements: [],
     legacyRequirements: [],
-    achievementMappings: []
+    achievementMappings: [],
+    educationRecords: [],
+    certificationRecords: [],
+    import: {
+      sessions: [],
+      completedBatches: [],
+      importReports: []
+    }
   };
 }
 
@@ -489,17 +520,18 @@ function validatePlainObjectArray(records, field, recordType, errors) {
   }
 }
 
-function validateJsonValue(value, path, active, errors) {
+function validateJsonValue(value, path, active, errors, rejectNegativeZero = false) {
   if (value === null || typeof value === "string" || typeof value === "boolean") {
     return;
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
+    if (!Number.isFinite(value) || (rejectNegativeZero && Object.is(value, -0))
+      || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
       addError(errors, {
         recordType: "legacyRequirement",
         field: path,
         path,
-        message: "Numbers must be finite."
+        message: rejectNegativeZero ? "Numbers must be finite and not negative zero." : "Numbers must be finite."
       });
     }
     return;
@@ -558,7 +590,7 @@ function validateJsonValue(value, path, active, errors) {
           });
           continue;
         }
-        validateJsonValue(descriptor.value, elementPath, active, errors);
+        validateJsonValue(descriptor.value, elementPath, active, errors, rejectNegativeZero);
       }
       return;
     }
@@ -594,7 +626,7 @@ function validateJsonValue(value, path, active, errors) {
         });
         continue;
       }
-      validateJsonValue(descriptor.value, propertyPath, active, errors);
+      validateJsonValue(descriptor.value, propertyPath, active, errors, rejectNegativeZero);
     }
   } catch {
     addError(errors, {
@@ -614,6 +646,52 @@ function validateRequirementArrayShape(records, field, errors) {
     return;
   }
   validateJsonValue(records, field, new WeakSet(), errors);
+}
+
+function copyValidatedJson(value, active = new WeakSet()) {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (active.has(value)) {
+    throw new TypeError("Cyclic references cannot be copied.");
+  }
+  active.add(value);
+  try {
+    const isArray = Array.isArray(value);
+    const prototype = Object.getPrototypeOf(value);
+    if (isArray ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError("Unsupported object prototype.");
+    }
+    const keys = Reflect.ownKeys(value);
+    const lengthDescriptor = isArray ? Object.getOwnPropertyDescriptor(value, "length") : null;
+    const length = isArray ? lengthDescriptor?.value : 0;
+    if (isArray && (!Number.isSafeInteger(length) || length < 0 || keys.length !== length + 1)) {
+      throw new TypeError("Array must be dense and contain no extra properties.");
+    }
+    const copy = isArray ? new Array(length) : Object.create(prototype);
+    for (const key of keys) {
+      if (isArray && key === "length") {
+        continue;
+      }
+      if (typeof key !== "string"
+        || (isArray && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= length))) {
+        throw new TypeError("Unsupported property.");
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)) {
+        throw new TypeError("Properties must be enumerable data properties.");
+      }
+      Object.defineProperty(copy, key, {
+        value: copyValidatedJson(descriptor.value, active),
+        enumerable: true,
+        writable: true,
+        configurable: true
+      });
+    }
+    return copy;
+  } finally {
+    active.delete(value);
+  }
 }
 
 function migrateV2Requirements(snapshot) {
@@ -648,13 +726,332 @@ function migrateV2Requirements(snapshot) {
   return { requirements, legacyRequirements };
 }
 
+function stripV4Provenance(record) {
+  return Object.fromEntries(
+    Object.keys(record)
+      .filter((field) => field !== "provenance")
+      .map((field) => [field, Object.getOwnPropertyDescriptor(record, field).value])
+  );
+}
+
+function validateProvenance(record) {
+  if (Object.hasOwn(record, "provenance")
+    && record.provenance !== null
+    && (!Array.isArray(record.provenance) || !isJsonCompatibleProvenance(record.provenance))) {
+    return [{ field: "provenance", message: "Must be null or a JSON-compatible array." }];
+  }
+  return [];
+}
+
+function validateWithProvenance(record, validator) {
+  const result = validator(stripV4Provenance(record));
+  const errors = [...result.errors, ...validateProvenance(record)];
+  return { valid: errors.length === 0, errors };
+}
+
+function validateV4ProfileRecord(record) {
+  return validateWithProvenance(record, validateCareerProfile);
+}
+
+function isValidStructuredDate(value) {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.length !== 2
+    || !keys.includes("value")
+    || !keys.includes("precision")
+    || keys.some((key) => typeof key !== "string")
+  ) {
+    return false;
+  }
+  const valueDescriptor = Object.getOwnPropertyDescriptor(value, "value");
+  const precisionDescriptor = Object.getOwnPropertyDescriptor(value, "precision");
+  if (
+    !valueDescriptor?.enumerable
+    || !("value" in valueDescriptor)
+    || !precisionDescriptor?.enumerable
+    || !("value" in precisionDescriptor)
+  ) {
+    return false;
+  }
+  const dateValue = valueDescriptor.value;
+  const precision = precisionDescriptor.value;
+  if (typeof dateValue !== "string" || typeof precision !== "string") {
+    return false;
+  }
+
+  const yearMatch = /^(\d{4})$/.exec(dateValue);
+  if (precision === "year") {
+    return Boolean(yearMatch && Number(yearMatch[1]) >= 1);
+  }
+
+  const monthMatch = /^(\d{4})-(\d{2})$/.exec(dateValue);
+  if (precision === "month") {
+    return Boolean(
+      monthMatch
+      && Number(monthMatch[1]) >= 1
+      && Number(monthMatch[2]) >= 1
+      && Number(monthMatch[2]) <= 12
+    );
+  }
+
+  const dayMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue);
+  if (precision !== "day" || !dayMatch || Number(dayMatch[1]) < 1) {
+    return false;
+  }
+
+  const year = Number(dayMatch[1]);
+  const month = Number(dayMatch[2]);
+  const day = Number(dayMatch[3]);
+  if (month < 1 || month > 12) {
+    return false;
+  }
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = month === 2
+    ? leapYear ? 29 : 28
+    : [4, 6, 9, 11].includes(month) ? 30 : 31;
+  return day >= 1 && day <= daysInMonth;
+}
+
+function structuredDateInterval(value) {
+  if (value === null) {
+    return null;
+  }
+  if (!isValidStructuredDate(value)) {
+    return undefined;
+  }
+  const { value: dateValue, precision } = value;
+  if (precision === "year") {
+    return { start: `${dateValue}-01-01`, end: `${dateValue}-12-31` };
+  }
+  if (precision === "month") {
+    const [year, month] = dateValue.split("-").map(Number);
+    const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    const daysInMonth = month === 2
+      ? leapYear ? 29 : 28
+      : [4, 6, 9, 11].includes(month) ? 30 : 31;
+    return {
+      start: `${dateValue}-01`,
+      end: `${dateValue}-${String(daysInMonth).padStart(2, "0")}`
+    };
+  }
+  return { start: dateValue, end: dateValue };
+}
+
+function validateV4EmploymentRecord(record) {
+  const errors = [];
+  const startInterval = structuredDateInterval(record.startDate);
+  const endInterval = structuredDateInterval(record.endDate);
+  if (startInterval === undefined) {
+    errors.push({
+      field: "startDate",
+      message: "Must be null or a valid structured date."
+    });
+  }
+  if (endInterval === undefined) {
+    errors.push({
+      field: "endDate",
+      message: "Must be null or a valid structured date."
+    });
+  }
+  if (
+    startInterval
+    && endInterval
+    && endInterval.end < startInterval.start
+  ) {
+    errors.push({
+      field: "endDate",
+      message: "The end date must not be definitely earlier than the start date."
+    });
+  }
+
+  const modelResult = validateWithProvenance(record, validateEmploymentRecord);
+  errors.push(...modelResult.errors);
+
+  return { valid: errors.length === 0, errors };
+}
+
+function validateV4AchievementRecord(record) {
+  return validateWithProvenance(record, validateAchievementRecord);
+}
+
+function validateHistoricalEmploymentRecord(record) {
+  const errors = [];
+  for (const field of ["startDate", "endDate"]) {
+    const value = record[field];
+    if (field === "endDate" && value === null) {
+      continue;
+    }
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      errors.push({ field, message: "Historical Employment dates must be full date strings." });
+    } else if (value.startsWith("0000-")) {
+      errors.push({ field, message: "Year 0000 cannot be represented in snapshot version 4." });
+    } else if (!isValidStructuredDate({ value, precision: "day" })) {
+      errors.push({ field, message: "Use a valid historical calendar date." });
+    }
+  }
+  if (record.isCurrent === true && record.endDate !== null) {
+    errors.push({ field: "endDate", message: "A current role must have a null end date." });
+  }
+  if (errors.length === 0 && record.endDate !== null && record.endDate < record.startDate) {
+    errors.push({ field: "endDate", message: "The end date must not be earlier than the start date." });
+  }
+  const result = validateEmploymentRecord(stripV4Provenance(record));
+  errors.push(
+    ...result.errors.filter((error) => error.field !== "startDate" && error.field !== "endDate"),
+    ...validateProvenance(record)
+  );
+  return { valid: errors.length === 0, errors };
+}
+
+function validateContainerArray(value, field, errors) {
+  let validArray = false;
+  try {
+    validArray = Array.isArray(value);
+    if (validArray && Object.getPrototypeOf(value) !== Array.prototype) {
+      validArray = false;
+    }
+  } catch {
+    validArray = false;
+  }
+  if (!validArray) {
+    addError(errors, { field, path: field, message: "Must be an array." });
+  }
+}
+
+function validateV4Containers(snapshot, errors) {
+  validateContainerArray(snapshot.educationRecords, "educationRecords", errors);
+  validateContainerArray(snapshot.certificationRecords, "certificationRecords", errors);
+
+  const importValue = snapshot.import;
+  let importIsPlainObject = false;
+  try {
+    importIsPlainObject = isPlainObject(importValue);
+  } catch {
+    addError(errors, {
+      field: "import",
+      path: "import",
+      message: "Import container could not be inspected safely."
+    });
+    return;
+  }
+  if (!importIsPlainObject) {
+    addError(errors, {
+      field: "import",
+      path: "import",
+      message: "Must be a plain object."
+    });
+    return;
+  }
+
+  let keys;
+  try {
+    keys = Reflect.ownKeys(importValue);
+  } catch {
+    addError(errors, {
+      field: "import",
+      path: "import",
+      message: "Import container properties could not be inspected safely."
+    });
+    return;
+  }
+  for (const key of keys) {
+    if (typeof key !== "string" || !importContainerFields.includes(key)) {
+      addError(errors, {
+        field: `import.${String(key)}`,
+        path: `import.${String(key)}`,
+        message: "Import container contains an unexpected property."
+      });
+    }
+  }
+  for (const field of importContainerFields) {
+    let descriptor;
+    try {
+      descriptor = Object.getOwnPropertyDescriptor(importValue, field);
+    } catch {
+      addError(errors, {
+        field: `import.${field}`,
+        path: `import.${field}`,
+        message: "Import container property could not be inspected safely."
+      });
+      continue;
+    }
+    if (!descriptor) {
+      addError(errors, {
+        field: `import.${field}`,
+        path: `import.${field}`,
+        message: "Import container property is required."
+      });
+      continue;
+    }
+    if (!descriptor?.enumerable || !("value" in descriptor)) {
+      addError(errors, {
+        field: `import.${field}`,
+        path: `import.${field}`,
+        message: "Import container properties must be enumerable data properties."
+      });
+    } else {
+      validateContainerArray(descriptor.value, `import.${field}`, errors);
+    }
+  }
+}
+
+function migrateV3ToV4(snapshot) {
+  const errors = [];
+  const migrateEmploymentDate = (date, recordId, index, field) => {
+    if (date === null) {
+      return null;
+    }
+    if (date.startsWith("0000-")) {
+      addError(errors, {
+        recordType: "employment",
+        recordId,
+        field: `employmentRecords[${index}].${field}`,
+        path: `employmentRecords[${index}].${field}`,
+        message: "Year 0000 cannot be represented in snapshot version 4."
+      });
+      return null;
+    }
+    return { value: date, precision: "day" };
+  };
+  const migrateRecord = (record) => ({
+    ...record,
+    ...(!Object.hasOwn(record, "provenance") ? { provenance: [] } : {})
+  });
+  const employmentRecords = snapshot.employmentRecords.map((record, index) => ({
+    ...record,
+    startDate: migrateEmploymentDate(record.startDate, record.id, index, "startDate"),
+    endDate: migrateEmploymentDate(record.endDate, record.id, index, "endDate"),
+    ...(!Object.hasOwn(record, "provenance") ? { provenance: [] } : {})
+  }));
+  if (errors.length > 0) {
+    return { errors };
+  }
+
+  return {
+    snapshot: {
+      ...snapshot,
+      profile: snapshot.profile === null ? null : migrateRecord(snapshot.profile),
+      employmentRecords,
+      achievementRecords: snapshot.achievementRecords.map(migrateRecord),
+      educationRecords: [],
+      certificationRecords: [],
+      import: {
+        sessions: [],
+        completedBatches: [],
+        importReports: []
+      }
+    },
+    errors
+  };
+}
+
 function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
   const errors = [];
-  const fields = version === 1
-    ? v1SnapshotFields
-    : version === 2
-      ? v2SnapshotFields
-      : snapshotFields;
+  const fields = snapshotFieldsForVersion(version);
   let snapshotIsPlainObject = false;
 
   try {
@@ -722,6 +1119,9 @@ function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
   let requirements = [];
   let legacyRequirements = [];
   let achievementMappings = [];
+  let educationRecords = [];
+  let certificationRecords = [];
+  let importValue;
   try {
     profile = Object.getOwnPropertyDescriptor(snapshot, "profile")?.value;
     employmentRecords = Object.getOwnPropertyDescriptor(snapshot, "employmentRecords")?.value;
@@ -733,11 +1133,22 @@ function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
         snapshot,
         "achievementMappings"
       )?.value;
-      if (version === 3) {
+      if (version >= 3) {
         legacyRequirements = Object.getOwnPropertyDescriptor(
           snapshot,
           "legacyRequirements"
         )?.value;
+      }
+      if (version === 4) {
+        educationRecords = Object.getOwnPropertyDescriptor(
+          snapshot,
+          "educationRecords"
+        )?.value;
+        certificationRecords = Object.getOwnPropertyDescriptor(
+          snapshot,
+          "certificationRecords"
+        )?.value;
+        importValue = Object.getOwnPropertyDescriptor(snapshot, "import")?.value;
       }
     }
   } catch {
@@ -760,7 +1171,9 @@ function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
     );
     if (arraysSafe) {
       try {
-        const result = validateCareerProfile(profile);
+        const result = version === 4
+          ? validateV4ProfileRecord(profile)
+          : validateV4ProfileRecord(profile);
         if (!result.valid) {
           for (const validationError of result.errors) {
             addError(errors, {
@@ -789,16 +1202,19 @@ function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
     employmentRecords,
     "employmentRecords",
     "employment",
-    validateEmploymentRecord,
+    version === 4 ? validateV4EmploymentRecord : validateHistoricalEmploymentRecord,
     errors
   );
   const validAchievementRecords = validateRecordArray(
     achievementRecords,
     "achievementRecords",
     "achievement",
-    validateAchievementRecord,
+    validateV4AchievementRecord,
     errors
   );
+  if (version === 4) {
+    validateV4Containers(snapshot, errors);
+  }
   const validJobs = version >= 2
     ? validateRecordArray(jobs, "jobs", "job", validateJobRecord, errors)
     : [];
@@ -811,7 +1227,7 @@ function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
       "achievement mapping",
       errors
     );
-  } else if (version === 3) {
+  } else if (version >= 3) {
     validRequirements = validateRecordArray(
       requirements,
       "requirements",
@@ -870,11 +1286,16 @@ function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
         employmentRecords,
         achievementRecords,
         jobs: validJobs,
-        requirements: version === 3
+        requirements: version >= 3
           ? validRequirements
           : requirements,
-        ...(version === 3 ? { legacyRequirements } : {}),
-        achievementMappings
+        ...(version >= 3 ? { legacyRequirements } : {}),
+        achievementMappings,
+        ...(version === 4 ? {
+          educationRecords,
+          certificationRecords,
+          import: importValue
+        } : {})
       }
   };
 }
@@ -1066,13 +1487,7 @@ function validateEnvelope(envelope, version) {
     }];
   }
 
-  const fields = version === 1
-    ? v1SnapshotFields
-    : version === 2
-      ? v2SnapshotFields
-      : version === SCHEMA_VERSION
-        ? snapshotFields
-        : [];
+  const fields = snapshotFieldsForVersion(version);
   const envelopeFields = ["version", ...fields];
   const expected = new Set(envelopeFields);
   for (const key of keys) {
@@ -1112,18 +1527,92 @@ function makeCorruptError(errors) {
   };
 }
 
+function normalizedDecimal(token) {
+  const [mantissa, exponent = "0"] = token.toLowerCase().split("e");
+  const negative = mantissa.startsWith("-");
+  const [whole, fraction = ""] = (negative ? mantissa.slice(1) : mantissa).split(".");
+  const digits = (whole + fraction).replace(/^0+/, "");
+  if (!digits) {
+    return { digits: "0", scale: 0, negative: false };
+  }
+  const significant = digits.replace(/0+$/, "");
+  const scale = Number(exponent) - fraction.length + digits.length - significant.length;
+  if (!Number.isSafeInteger(scale)) {
+    return null;
+  }
+  return { digits: significant, scale, negative };
+}
+
+// Compare decimal values rather than spelling; never expand an exponent into zeros.
+function numericTokenProtectionReason(raw) {
+  const numberPattern = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+  let precisionLoss = false;
+  for (let index = 0; index < raw.length;) {
+    if (raw[index] === '"') {
+      index += 1;
+      while (index < raw.length) {
+        if (raw[index] === "\\") index += 2;
+        else if (raw[index++] === '"') break;
+      }
+      continue;
+    }
+    if (raw[index] === "-" || (raw[index] >= "0" && raw[index] <= "9")) {
+      numberPattern.lastIndex = index;
+      const token = numberPattern.exec(raw)[0];
+      index = numberPattern.lastIndex;
+      const [mantissa, exponent = "0"] = token.toLowerCase().split("e");
+      const unsigned = mantissa.replace("-", "");
+      const [whole, fraction = ""] = unsigned.split(".");
+      const digits = (whole + fraction).replace(/^0+/, "");
+      if (!digits) continue;
+      const scale = Number(exponent) - fraction.length;
+      let integerDigits = digits;
+      let isInteger = true;
+      if (scale < 0) {
+        const trailingZeros = (digits.match(/0*$/) || [""])[0].length;
+        if (-scale > trailingZeros) {
+          isInteger = false;
+        } else {
+          integerDigits = digits.slice(0, digits.length + scale);
+        }
+      }
+      const length = integerDigits.length + Math.max(0, scale);
+      if (isInteger && (length > 16 || (length === 16
+        && (scale > 0 ? integerDigits + "0".repeat(scale) : integerDigits) > "9007199254740991"))) {
+        return "unsafe-integer";
+      }
+
+      const parsed = Number(token);
+      if (!Number.isFinite(parsed)) {
+        precisionLoss = true;
+        continue;
+      }
+      const original = normalizedDecimal(token);
+      const serialized = normalizedDecimal(JSON.stringify(parsed));
+      if (!original || !serialized || original.digits !== serialized.digits
+        || original.scale !== serialized.scale || original.negative !== serialized.negative) {
+        precisionLoss = true;
+      }
+      continue;
+    }
+    index += 1;
+  }
+  return precisionLoss ? "numeric-precision" : null;
+}
+
 /**
  * Creates a storage adapter using an injected Storage-like object.
  *
  * Public API:
- * - load(): return `missing`, `loaded`, `corrupt`, `unsupported-version`, or
+ * - load(): return `missing`, `loaded`, `protected`, `corrupt`, `unsupported-version`, or
  *   `unavailable`, with a validated snapshot where applicable.
- * - save(snapshot): validate and persist the complete version-3 envelope,
+ * - save(snapshot): validate and persist the complete version-4 envelope,
  *   returning a status result.
  *
- * Valid version-1 and version-2 snapshots are migrated in memory to version 3.
- * Loading never writes storage; corrupt or unsupported data disables writes
- * for this adapter instance.
+ * Valid historical snapshots are sequentially migrated in memory to version 4.
+ * Loading never writes storage; corrupt or unsupported data disables writes for
+ * this adapter instance. Each save rechecks stored data. Historical negative
+ * zero and unsafe raw numeric tokens disable writes to prevent lossy replacement.
  */
 export function createCareerStorage(storage) {
   if (
@@ -1137,8 +1626,7 @@ export function createCareerStorage(storage) {
 
   let writesDisabled = false;
 
-  return {
-    load() {
+  function loadStored() {
       let raw;
       try {
         raw = storage.getItem(STORAGE_KEY);
@@ -1179,6 +1667,12 @@ export function createCareerStorage(storage) {
           }]),
           writesDisabled: true
         };
+      }
+
+      const numericProtectionReason = numericTokenProtectionReason(raw);
+      if (numericProtectionReason) {
+        writesDisabled = true;
+        return { status: "protected", reason: numericProtectionReason, writesDisabled: true };
       }
 
       if (!isPlainObject(envelope)) {
@@ -1243,7 +1737,7 @@ export function createCareerStorage(storage) {
           writesDisabled: true
         };
       }
-      if (version !== 1 && version !== 2 && version !== SCHEMA_VERSION) {
+      if (version !== 1 && version !== 2 && version !== 3 && version !== 4) {
         writesDisabled = true;
         return { status: "unsupported-version", version, writesDisabled: true };
       }
@@ -1261,11 +1755,7 @@ export function createCareerStorage(storage) {
       let snapshot;
       try {
         snapshot = {};
-        const fields = version === 1
-          ? v1SnapshotFields
-          : version === 2
-            ? v2SnapshotFields
-            : snapshotFields;
+        const fields = snapshotFieldsForVersion(version);
         for (const field of fields) {
           snapshot[field] = Object.getOwnPropertyDescriptor(envelope, field).value;
         }
@@ -1301,6 +1791,31 @@ export function createCareerStorage(storage) {
           writesDisabled: true
         };
       }
+      const snapshotFidelityErrors = [];
+      validateJsonValue(validation.snapshot, "snapshot", new WeakSet(), snapshotFidelityErrors);
+      if (snapshotFidelityErrors.length > 0) {
+        writesDisabled = true;
+        return {
+          status: "corrupt",
+          error: makeCorruptError(snapshotFidelityErrors),
+          writesDisabled: true
+        };
+      }
+      const negativeZeroErrors = [];
+      validateJsonValue(validation.snapshot, "snapshot", new WeakSet(), negativeZeroErrors, true);
+      const historicalNegativeZero = version < 4 && negativeZeroErrors.length > 0
+        && negativeZeroErrors.every((error) =>
+          (version === 2 && error.path.startsWith("snapshot.requirements["))
+          || (version === 3 && error.path.startsWith("snapshot.legacyRequirements["))
+        );
+      if (negativeZeroErrors.length > 0 && !historicalNegativeZero) {
+        writesDisabled = true;
+        return {
+          status: "corrupt",
+          error: makeCorruptError(negativeZeroErrors),
+          writesDisabled: true
+        };
+      }
 
       const v2Snapshot = version === 1
         ? {
@@ -1322,15 +1837,52 @@ export function createCareerStorage(storage) {
         };
       }
 
-      const migratedSnapshot = version < 3
+      const migratedV3Snapshot = version < 3
         ? {
           ...v2Validation.snapshot,
           ...migrateV2Requirements(v2Validation.snapshot)
         }
         : v2Validation.snapshot;
-      const finalValidation = version < 3
-        ? validateSnapshot(migratedSnapshot, 3)
+      const v3Validation = version < 3
+        ? validateSnapshot(migratedV3Snapshot, 3)
         : validation;
+      if (!v3Validation.valid) {
+        writesDisabled = true;
+        return {
+          status: "corrupt",
+          error: makeCorruptError(v3Validation.errors),
+          writesDisabled: true
+        };
+      }
+
+      if (version === 4) {
+        return { status: "loaded", snapshot: v3Validation.snapshot };
+      }
+
+      let migration;
+      try {
+        migration = migrateV3ToV4(v3Validation.snapshot);
+      } catch {
+        writesDisabled = true;
+        return {
+          status: "corrupt",
+          error: makeCorruptError([{
+            field: "snapshot",
+            path: "snapshot",
+            message: "Historical snapshot could not be migrated safely."
+          }]),
+          writesDisabled: true
+        };
+      }
+      if (migration.errors.length > 0) {
+        writesDisabled = true;
+        return {
+          status: "corrupt",
+          error: makeCorruptError(migration.errors),
+          writesDisabled: true
+        };
+      }
+      const finalValidation = validateSnapshot(migration.snapshot, 4);
       if (!finalValidation.valid) {
         writesDisabled = true;
         return {
@@ -1340,11 +1892,23 @@ export function createCareerStorage(storage) {
         };
       }
 
+      if (historicalNegativeZero) {
+        writesDisabled = true;
+        return { status: "loaded", snapshot: finalValidation.snapshot, writesDisabled: true };
+      }
       return { status: "loaded", snapshot: finalValidation.snapshot };
-    },
-
+  }
+  return {
+    load: loadStored,
     save(snapshot) {
       if (writesDisabled) {
+        return { status: "writes-disabled" };
+      }
+      const existing = loadStored();
+      if (existing.status === "unavailable") {
+        return { status: "write-failed", error: existing.error };
+      }
+      if (writesDisabled || existing.writesDisabled) {
         return { status: "writes-disabled" };
       }
 
@@ -1357,18 +1921,36 @@ export function createCareerStorage(storage) {
       if (fidelityErrors.length > 0) {
         return { status: "json-fidelity-error", errors: fidelityErrors };
       }
+      const snapshotFidelityErrors = [];
+      validateJsonValue(validation.snapshot, "snapshot", new WeakSet(), snapshotFidelityErrors, true);
+      if (snapshotFidelityErrors.length > 0) {
+        return { status: "json-fidelity-error", errors: snapshotFidelityErrors };
+      }
+
+      let detached;
+      try {
+        detached = copyValidatedJson(validation.snapshot);
+      } catch {
+        return {
+          status: "json-fidelity-error",
+          errors: [{ field: "snapshot", path: "snapshot", message: "Snapshot could not be copied faithfully." }]
+        };
+      }
+      const detachedValidation = validateSnapshot(detached);
+      if (!detachedValidation.valid) {
+        return { status: "invalid-snapshot", errors: detachedValidation.errors };
+      }
+      const detachedErrors = validateEvidence(detachedValidation.snapshot);
+      validateJsonValue(detachedValidation.snapshot, "snapshot", new WeakSet(), detachedErrors, true);
+      if (detachedErrors.length > 0) {
+        return { status: "json-fidelity-error", errors: detachedErrors };
+      }
 
       let serialized;
       try {
         serialized = JSON.stringify({
           version: SCHEMA_VERSION,
-          profile: validation.snapshot.profile,
-          employmentRecords: validation.snapshot.employmentRecords,
-          achievementRecords: validation.snapshot.achievementRecords,
-          jobs: validation.snapshot.jobs,
-          requirements: validation.snapshot.requirements,
-          legacyRequirements: validation.snapshot.legacyRequirements,
-          achievementMappings: validation.snapshot.achievementMappings
+          ...detachedValidation.snapshot
         });
       } catch {
         return {
@@ -1381,6 +1963,15 @@ export function createCareerStorage(storage) {
         };
       }
 
+      // Storage has no compare-and-swap; another writer can still race this
+      // final check and setItem. Do not treat this as cross-tab locking.
+      const latest = loadStored();
+      if (latest.status === "unavailable") {
+        return { status: "write-failed", error: latest.error };
+      }
+      if (writesDisabled || latest.writesDisabled) {
+        return { status: "writes-disabled" };
+      }
       try {
         storage.setItem(STORAGE_KEY, serialized);
       } catch {

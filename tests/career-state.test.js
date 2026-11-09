@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAchievementMappingRecord } from "../src/js/achievement-mapping-model.js";
 import { createCareerState } from "../src/js/career-state.js";
+import { createCareerStorage } from "../src/js/career-storage.js";
+import { validateCareerProfile, validateEmploymentRecord } from "../src/js/career-model.js";
+import { validateAchievementRecord } from "../src/js/achievement-model.js";
 import { createJobRecord } from "../src/js/job-model.js";
 import { createRequirementRecord } from "../src/js/requirement-model.js";
 
@@ -57,6 +60,7 @@ function completeProfile(overrides = {}) {
   return {
     id: "profile-1",
     ...profileInput(),
+    provenance: [],
     createdAt,
     updatedAt: createdAt,
     ...overrides
@@ -67,6 +71,8 @@ function completeEmployment(id, overrides = {}) {
   return {
     id,
     ...employmentInput(),
+    startDate: { value: "2020-01-01", precision: "day" },
+    provenance: [],
     createdAt,
     updatedAt: createdAt,
     ...overrides
@@ -77,6 +83,7 @@ function completeAchievement(id, overrides = {}) {
   return {
     id,
     ...achievementInput(),
+    provenance: [],
     verificationStatus: "unverified",
     createdAt,
     updatedAt: createdAt,
@@ -132,6 +139,9 @@ function emptySnapshot(overrides = {}) {
     requirements: [],
     legacyRequirements: [],
     achievementMappings: [],
+    educationRecords: [],
+    certificationRecords: [],
+    import: { sessions: [], completedBatches: [], importReports: [] },
     ...overrides
   };
 }
@@ -147,6 +157,9 @@ function completeSnapshot(overrides = {}) {
     requirements: [],
     legacyRequirements: [],
     achievementMappings: [],
+    educationRecords: [],
+    certificationRecords: [],
+    import: { sessions: [], completedBatches: [], importReports: [] },
     ...overrides
   };
 }
@@ -159,6 +172,356 @@ test("initializes empty profile and record collections", () => {
   assert.deepEqual(state.getAchievementRecords(), []);
   assert.deepEqual(state.getJobs(), []);
   assert.deepEqual(state.getSnapshot(), emptySnapshot());
+});
+
+test("v4 snapshots round trip opaque collections, precision, and provenance without sharing references", () => {
+  const state = createCareerState();
+  const input = completeSnapshot({
+    profile: completeProfile({ provenance: [{ nested: ["profile"] }] }),
+    employmentRecords: [completeEmployment("employment-1", {
+      startDate: { value: "2020", precision: "year" },
+      endDate: { value: "2021-05", precision: "month" },
+      isCurrent: false,
+      provenance: [{ nested: ["employment"] }]
+    })],
+    achievementRecords: [completeAchievement("achievement-1", {
+      employmentId: "employment-1",
+      provenance: [{ nested: ["achievement"] }]
+    })],
+    educationRecords: [{ nested: [{ value: "education" }] }, null],
+    certificationRecords: [{ nested: [{ value: "certification" }] }],
+    import: {
+      sessions: [{ nested: ["session"] }],
+      completedBatches: [{ nested: ["batch"] }],
+      importReports: [{ nested: ["report"] }]
+    }
+  });
+  const expected = structuredClone(input);
+
+  state.restoreSnapshot(input);
+  assert.deepEqual(state.getSnapshot(), expected);
+  input.educationRecords[0].nested[0].value = "changed";
+  input.import.sessions[0].nested[0] = "changed";
+  input.profile.provenance[0].nested[0] = "changed";
+
+  const exported = state.getSnapshot();
+  exported.certificationRecords[0].nested[0].value = "changed";
+  exported.import.completedBatches[0].nested[0] = "changed";
+  exported.import.importReports[0].nested[0] = "changed";
+  exported.employmentRecords[0].startDate.value = "1999";
+  exported.achievementRecords[0].provenance[0].nested[0] = "changed";
+  state.getProfile().provenance[0].nested[0] = "changed";
+  state.getEmploymentRecords()[0].endDate.value = "1999-01";
+  state.getAchievementRecords()[0].provenance[0].nested[0] = "changed";
+  assert.deepEqual(state.getSnapshot(), expected);
+
+  state.updateProfile(profileInput({ fullName: "Updated" }), updatedAt);
+  const afterMutation = state.getSnapshot();
+  assert.deepEqual(afterMutation.educationRecords, expected.educationRecords);
+  assert.deepEqual(afterMutation.certificationRecords, expected.certificationRecords);
+  assert.deepEqual(afterMutation.import, expected.import);
+  assert.deepEqual(afterMutation.profile.provenance, expected.profile.provenance);
+});
+
+test("v4 state snapshots save and load through the storage contract", () => {
+  let stored = null;
+  const storage = createCareerStorage({
+    getItem: () => stored,
+    setItem: (key, value) => { stored = value; }
+  });
+  const source = createCareerState();
+  const snapshot = completeSnapshot({
+    employmentRecords: [completeEmployment("employment-1", {
+      startDate: { value: "2020", precision: "year" },
+      endDate: { value: "2021-05", precision: "month" },
+      isCurrent: false
+    })],
+    educationRecords: [{ nested: ["education"] }],
+    certificationRecords: [{ nested: ["certification"] }],
+    import: {
+      sessions: [{ nested: ["session"] }],
+      completedBatches: [{ nested: ["batch"] }],
+      importReports: [{ nested: ["report"] }]
+    }
+  });
+  source.restoreSnapshot(snapshot);
+  assert.equal(storage.save(source.getSnapshot()).status, "saved");
+
+  const loaded = storage.load();
+  assert.equal(loaded.status, "loaded");
+  const restored = createCareerState();
+  restored.restoreSnapshot(loaded.snapshot);
+  assert.deepEqual(restored.getSnapshot(), snapshot);
+  restored.updateProfile(profileInput({ fullName: "Updated" }), updatedAt);
+  assert.equal(storage.save(restored.getSnapshot()).status, "saved");
+  const reloaded = storage.load();
+  assert.equal(reloaded.status, "loaded");
+  assert.deepEqual(reloaded.snapshot.import, snapshot.import);
+  assert.deepEqual(reloaded.snapshot.educationRecords, snapshot.educationRecords);
+  assert.deepEqual(reloaded.snapshot.certificationRecords, snapshot.certificationRecords);
+});
+
+test("v4 missing, null and array provenance loads and survives ordinary updates", () => {
+  for (const provenance of [undefined, null, [], [{ excerpt: "source" }]]) {
+    const snapshot = completeSnapshot();
+    for (const record of [snapshot.profile, snapshot.employmentRecords[0], snapshot.achievementRecords[0]]) {
+      if (provenance === undefined) {
+        delete record.provenance;
+      } else {
+        record.provenance = structuredClone(provenance);
+      }
+    }
+    let raw = JSON.stringify({ version: 4, ...snapshot });
+    const storage = createCareerStorage({
+      getItem: () => raw,
+      setItem: (key, value) => { raw = value; }
+    });
+    const loaded = storage.load();
+    assert.equal(loaded.status, "loaded");
+    const state = createCareerState();
+    state.restoreSnapshot(loaded.snapshot);
+    state.updateProfile(profileInput({ fullName: "Updated" }), updatedAt);
+    state.updateEmploymentRecord("employment-1", employmentInput(), updatedAt);
+    state.updateAchievementRecord("achievement-1", achievementInput({
+      employmentId: "employment-1"
+    }), updatedAt);
+    const output = state.getSnapshot();
+    assert.equal(validateCareerProfile(output.profile).valid, true);
+    assert.equal(validateEmploymentRecord(output.employmentRecords[0]).valid, true);
+    assert.equal(validateAchievementRecord(output.achievementRecords[0]).valid, true);
+    for (const record of [output.profile, output.employmentRecords[0], output.achievementRecords[0]]) {
+      assert.equal(Object.hasOwn(record, "provenance"), provenance !== undefined);
+      if (provenance !== undefined) {
+        assert.deepEqual(record.provenance, provenance);
+      }
+    }
+    assert.equal(storage.save(output).status, "saved");
+    const replacement = [{ excerpt: "replacement" }];
+    state.updateProfile(profileInput({ provenance: replacement }), updatedAt);
+    state.updateEmploymentRecord("employment-1", employmentInput({ provenance: replacement }), updatedAt);
+    state.updateAchievementRecord("achievement-1", achievementInput({ provenance: replacement }), updatedAt);
+    assert.deepEqual(state.getProfile().provenance, replacement);
+    assert.deepEqual(state.getEmploymentRecords()[0].provenance, replacement);
+    assert.deepEqual(state.getAchievementRecords()[0].provenance, replacement);
+  }
+});
+
+test("new records default provenance to an array and accept explicit null", () => {
+  const state = createCareerState();
+  assert.deepEqual(state.createProfile(profileInput(), { id: "p", createdAt }).provenance, []);
+  assert.equal(addEmployment(state, "e", employmentInput({ provenance: null })).provenance, null);
+  assert.equal(addAchievement(state, "a", achievementInput({ provenance: null })).provenance, null);
+  assert.equal(state.updateProfile(profileInput({ provenance: null }), updatedAt).provenance, null);
+  assert.equal(state.updateAchievementRecord("a", achievementInput({ provenance: null }), updatedAt).provenance, null);
+});
+
+test("frozen snapshot arrays are restored as mutable data", () => {
+  const state = createCareerState();
+  const snapshot = emptySnapshot({ employmentRecords: Object.freeze([]) });
+  state.restoreSnapshot(snapshot);
+  addEmployment(state, "new-employment");
+  assert.equal(state.getEmploymentRecords().length, 1);
+  assert.equal(snapshot.employmentRecords.length, 0);
+});
+
+test("lossy values are rejected before restore or CRUD mutation", () => {
+  const cycle = {};
+  cycle.self = cycle;
+  for (const value of [undefined, NaN, -0, 1n, Symbol("x"), () => {}, new Date(), new Array(1), cycle]) {
+    const state = createCareerState();
+    const before = state.getSnapshot();
+    assert.throws(() => state.restoreSnapshot(emptySnapshot({ educationRecords: [value] })), TypeError);
+    assert.deepEqual(state.getSnapshot(), before);
+    assert.throws(() => state.createProfile(profileInput({ provenance: [value] }), {
+      id: "profile-1", createdAt
+    }), TypeError);
+    assert.deepEqual(state.getSnapshot(), before);
+    state.restoreSnapshot(emptySnapshot());
+  }
+  const state = createCareerState();
+  const invalidEvidence = Object.assign(Object.create(null), { source: "value" });
+  assert.throws(() => addAchievement(state, "a", achievementInput({ evidence: [invalidEvidence] })), /Evidence objects/);
+  assert.deepEqual(state.getSnapshot(), emptySnapshot());
+  const job = completeJob("job-1");
+  job[Symbol("hidden")] = { nested: true };
+  assert.throws(() => state.createJob(job), /symbol-keyed/);
+  assert.deepEqual(state.getSnapshot(), emptySnapshot());
+});
+
+test("unknown Employment start dates round trip without invented chronology", () => {
+  const state = createCareerState();
+  addEmployment(state, "employment-1", employmentInput({
+    startDate: null,
+    endDate: { value: "1900", precision: "year" },
+    isCurrent: false
+  }));
+  let raw = null;
+  const storage = createCareerStorage({
+    getItem: () => raw,
+    setItem: (key, value) => { raw = value; }
+  });
+  assert.equal(storage.save(state.getSnapshot()).status, "saved");
+  const restored = createCareerState();
+  restored.restoreSnapshot(storage.load().snapshot);
+  assert.deepEqual(restored.getEmploymentRecords()[0].startDate, null);
+  assert.deepEqual(restored.getEmploymentRecords()[0].endDate, { value: "1900", precision: "year" });
+});
+
+test("requirement mutation results are detached from live state", () => {
+  const state = createCareerState();
+  state.restoreSnapshot(emptySnapshot({
+    jobs: [completeJob("job-1")],
+    requirements: [completeRequirement("requirement-1", "job-1")]
+  }));
+  const unchanged = state.updateRequirement("requirement-1", {});
+  unchanged.description = "changed";
+  const updated = state.updateRequirement("requirement-1", {
+    description: "Updated",
+    updatedAt
+  });
+  updated.description = "changed again";
+  assert.equal(state.getRequirements("job-1")[0].description, "Updated");
+});
+
+test("restores supported legacy snapshots with v4 defaults and canonical day dates", () => {
+  const state = createCareerState();
+  const profile = completeProfile();
+  const employment = completeEmployment("employment-1", {
+    startDate: "2020-01-01",
+    endDate: "2021-12-31",
+    isCurrent: false
+  });
+  const achievement = completeAchievement("achievement-1", {
+    employmentId: "employment-1"
+  });
+  delete profile.provenance;
+  delete employment.provenance;
+  delete achievement.provenance;
+  const legacy = { profile, employmentRecords: [employment], achievementRecords: [achievement] };
+
+  state.restoreSnapshot(legacy);
+  const snapshot = state.getSnapshot();
+  assert.deepEqual(snapshot.employmentRecords[0].startDate, {
+    value: "2020-01-01",
+    precision: "day"
+  });
+  assert.deepEqual(snapshot.employmentRecords[0].endDate, {
+    value: "2021-12-31",
+    precision: "day"
+  });
+  assert.deepEqual(snapshot.profile.provenance, []);
+  assert.deepEqual(snapshot.employmentRecords[0].provenance, []);
+  assert.deepEqual(snapshot.achievementRecords[0].provenance, []);
+  assert.deepEqual(snapshot.educationRecords, []);
+  assert.deepEqual(snapshot.certificationRecords, []);
+  assert.deepEqual(snapshot.import, { sessions: [], completedBatches: [], importReports: [] });
+  assert.equal(legacy.employmentRecords[0].startDate, "2020-01-01");
+});
+
+test("rejects malformed v4 containers and records atomically", () => {
+  const missingV4Field = completeSnapshot();
+  delete missingV4Field.educationRecords;
+  const missingOlderField = completeSnapshot();
+  delete missingOlderField.jobs;
+  const invalidSnapshots = [
+    missingV4Field,
+    missingOlderField,
+    completeSnapshot({ educationRecords: {} }),
+    completeSnapshot({ certificationRecords: null }),
+    completeSnapshot({ import: [] }),
+    completeSnapshot({ import: { sessions: [], completedBatches: [] } }),
+    completeSnapshot({ import: {
+      sessions: [], completedBatches: {}, importReports: []
+    } }),
+    completeSnapshot({ import: {
+      sessions: [], completedBatches: [], importReports: [], extra: []
+    } }),
+    completeSnapshot({ profile: completeProfile({ skills: "invalid" }) }),
+    completeSnapshot({ employmentRecords: [completeEmployment("employment-1", {
+      startDate: "2020-01-01"
+    })] }),
+    completeSnapshot({ employmentRecords: [completeEmployment("employment-1", {
+      startDate: { value: "2020-13", precision: "month" }
+    })] }),
+    completeSnapshot({ achievementRecords: [completeAchievement("achievement-1", {
+      verificationStatus: "invalid"
+    })] }),
+    completeSnapshot({ requirements: [{ id: "invalid", jobId: "job-1" }] }),
+    completeSnapshot({ requirements: [completeRequirement("req-1", "missing")] }),
+    completeSnapshot({
+      jobs: [completeJob("job-1")],
+      requirements: [
+        completeRequirement("req-1", "job-1"),
+        completeRequirement("req-1", "job-1")
+      ]
+    })
+  ];
+
+  for (const invalid of invalidSnapshots) {
+    const state = createCareerState();
+    const before = state.getSnapshot();
+    assert.throws(() => state.restoreSnapshot(invalid), TypeError);
+    assert.deepEqual(state.getSnapshot(), before);
+    state.restoreSnapshot(emptySnapshot());
+  }
+});
+
+test("restoration remains forbidden after mutation without changing state", () => {
+  const state = createCareerState();
+  state.createProfile(profileInput(), { id: "profile-1", createdAt });
+  const before = state.getSnapshot();
+  assert.throws(() => state.restoreSnapshot(completeSnapshot()), /fresh state/);
+  assert.deepEqual(state.getSnapshot(), before);
+});
+
+test("getters detach nested values in historically accepted mappings", () => {
+  const state = createCareerState();
+  const snapshot = completeSnapshot({
+    jobs: [completeJob("job-1")],
+    requirements: [completeRequirement("requirement-1", "job-1")],
+    achievementMappings: [{
+      id: "mapping-1",
+      requirementId: "requirement-1",
+      achievementId: "achievement-1",
+      nested: { value: "original" }
+    }]
+  });
+  delete snapshot.educationRecords;
+  delete snapshot.certificationRecords;
+  delete snapshot.import;
+  state.restoreSnapshot(snapshot);
+  const before = state.getSnapshot();
+  state.getRequirements("job-1")[0].description = "changed";
+  state.getAchievementMappingsForRequirement("requirement-1")[0].nested.value = "changed";
+  state.getAchievementMappingsForAchievement("achievement-1")[0].nested.value = "changed";
+  assert.deepEqual(state.getSnapshot(), before);
+});
+
+test("direct legacy snapshots with unclassified Requirements are rejected without mutation", () => {
+  const state = createCareerState();
+  const requirements = [{ id: "legacy", jobId: "job-1" }];
+  const before = state.getSnapshot();
+  assert.throws(() => state.restoreSnapshot({
+    profile: null,
+    employmentRecords: [],
+    achievementRecords: [],
+    requirements
+  }), /Career snapshot is invalid/);
+  assert.deepEqual(state.getSnapshot(), before);
+  assert.deepEqual(requirements, [{ id: "legacy", jobId: "job-1" }]);
+  state.restoreSnapshot(emptySnapshot());
+});
+
+test("rejects mutable values that cannot be safely copied before committing a record", () => {
+  const state = createCareerState();
+  const before = state.getSnapshot();
+  for (const provenance of [[new Date()], [() => {}]]) {
+    assert.throws(
+      () => state.createProfile(profileInput({ provenance }), { id: "profile-1", createdAt }),
+      TypeError
+    );
+    assert.deepEqual(state.getSnapshot(), before);
+  }
 });
 
 test("restores a complete validated snapshot without mutation notification", () => {
@@ -280,24 +643,59 @@ test("snapshot copies isolate every collection and nested supported value", () =
   assert.equal(state.getEmploymentRecords().length, 1);
 });
 
-test("snapshot copying preserves evidence cycles and shared references", () => {
+test("shared opaque and legacy values are independently validated and copied", () => {
+  const nested = { details: [1, { excerpt: "source" }] };
+  const shared = { nested };
+  const input = completeSnapshot({
+    legacyRequirements: [shared],
+    educationRecords: [shared],
+    certificationRecords: [{ nested }]
+  });
+  const state = createCareerState();
+  state.restoreSnapshot(input);
+  const output = state.getSnapshot();
+  assert.notEqual(output.legacyRequirements[0], output.educationRecords[0]);
+  assert.notEqual(output.educationRecords[0].nested, output.certificationRecords[0].nested);
+  assert.deepEqual(output.legacyRequirements[0], output.educationRecords[0]);
+  let raw = null;
+  const storage = createCareerStorage({ getItem: () => raw, setItem: (key, value) => { raw = value; } });
+  assert.equal(storage.save(output).status, "saved");
+  assert.deepEqual(storage.load().snapshot, output);
+  const fresh = createCareerState();
+  const before = fresh.getSnapshot();
+  const negative = { value: -0 };
+  assert.throws(() => fresh.restoreSnapshot(completeSnapshot({
+    legacyRequirements: [negative], educationRecords: [negative]
+  })), /faithfully/);
+  assert.deepEqual(fresh.getSnapshot(), before);
+  const cycle = {}; cycle.self = cycle;
+  assert.throws(() => fresh.restoreSnapshot(completeSnapshot({ educationRecords: [cycle] })), /cyclic/);
+  assert.throws(() => fresh.restoreSnapshot(completeSnapshot({ educationRecords: [{ invalid: undefined }] })), /faithfully/);
+  assert.deepEqual(fresh.getSnapshot(), before);
+});
+
+test("snapshot copying detaches shared references and rejects cycles", () => {
   const shared = { label: "shared" };
   const cycle = { label: "cycle" };
   cycle.self = cycle;
   const state = createCareerState();
   addAchievement(state, "achievement-1", achievementInput({
-    evidence: [shared, shared, cycle]
+    evidence: [shared, shared]
   }));
 
   const snapshot = state.getSnapshot();
   const evidence = snapshot.achievementRecords[0].evidence;
-  assert.equal(evidence[0], evidence[1]);
-  assert.equal(evidence[2].self, evidence[2]);
+  assert.notEqual(evidence[0], evidence[1]);
+  assert.deepEqual(evidence[0], evidence[1]);
   assert.notEqual(evidence[0], shared);
-  assert.notEqual(evidence[2], cycle);
+  const before = state.getSnapshot();
+  assert.throws(() => state.updateAchievementRecord("achievement-1", achievementInput({
+    evidence: [cycle]
+  }), updatedAt), /cyclic/);
+  assert.deepEqual(state.getSnapshot(), before);
 });
 
-test("snapshot copying preserves non-writable and non-configurable descriptors", () => {
+test("snapshot copying normalizes non-writable and non-configurable descriptors", () => {
   const array = ["fixed"];
   Object.defineProperty(array, "0", {
     value: "fixed",
@@ -338,17 +736,18 @@ test("snapshot copying preserves non-writable and non-configurable descriptors",
     {
       value: "fixed",
       enumerable: true,
-      writable: false,
-      configurable: false
+      writable: true,
+      configurable: true
     }
   );
-  assert.equal(copiedLengthDescriptor.writable, false);
+  assert.equal(copiedLengthDescriptor.writable, true);
   assert.equal(copiedObjectDescriptor.enumerable, true);
-  assert.equal(copiedObjectDescriptor.writable, false);
-  assert.equal(copiedObjectDescriptor.configurable, false);
+  assert.equal(copiedObjectDescriptor.writable, true);
+  assert.equal(copiedObjectDescriptor.configurable, true);
   assert.notEqual(copiedObjectDescriptor.value, object.fixed);
-  assert.throws(() => { result.array[0] = "changed"; }, TypeError);
-  assert.throws(() => { result.object.fixed = {}; }, TypeError);
+  result.array[0] = "changed";
+  result.object.fixed = {};
+  assert.equal(state.getSnapshot().achievementRecords[0].evidence[0].array[0], "fixed");
 });
 
 test("array element descriptor reflection failures are contextual TypeErrors", () => {
@@ -403,7 +802,7 @@ test("proxy reflection failures do not partially hydrate state", () => {
   });
 });
 
-test("hydration and snapshots preserve shared evidence references across records", () => {
+test("hydration and snapshots detach shared evidence across records", () => {
   const shared = { source: "common" };
   const snapshot = {
     profile: null,
@@ -419,7 +818,8 @@ test("hydration and snapshots preserve shared evidence references across records
   const restored = state.getSnapshot();
   const firstEvidence = restored.achievementRecords[0].evidence[0];
   const secondEvidence = restored.achievementRecords[1].evidence[0];
-  assert.equal(firstEvidence, secondEvidence);
+  assert.notEqual(firstEvidence, secondEvidence);
+  assert.deepEqual(firstEvidence, secondEvidence);
   assert.notEqual(firstEvidence, shared);
 });
 
@@ -583,9 +983,9 @@ test("deletes a Job and cascades only its Requirements and their mappings", () =
       completeJob("job-2", { company: "Other Company" })
     ],
     requirements: [
-      { id: "requirement-1", jobId: "job-1" },
-      { id: "requirement-2", jobId: "job-1" },
-      { id: "requirement-3", jobId: "job-2" }
+      completeRequirement("requirement-1", "job-1"),
+      completeRequirement("requirement-2", "job-1"),
+      completeRequirement("requirement-3", "job-2")
     ],
     achievementMappings: [
       { id: "mapping-1", requirementId: "requirement-1", achievementId: "achievement-1" },
@@ -654,8 +1054,8 @@ test("deleting a Job with Requirements but no mappings preserves other records",
       completeJob("job-2", { company: "Other Company" })
     ],
     requirements: [
-      { id: "requirement-1", jobId: "job-1" },
-      { id: "requirement-2", jobId: "job-2" }
+      completeRequirement("requirement-1", "job-1"),
+      completeRequirement("requirement-2", "job-2")
     ]
   }));
 
@@ -668,7 +1068,7 @@ test("deleting a Job with Requirements but no mappings preserves other records",
     company: "Other Company"
   })]);
   assert.deepEqual(state.getSnapshot().requirements, [
-    { id: "requirement-2", jobId: "job-2" }
+    completeRequirement("requirement-2", "job-2")
   ]);
   assert.deepEqual(state.getSnapshot().achievementMappings, []);
 });
@@ -677,7 +1077,7 @@ test("Job and future relationship snapshots are detached from internal state", (
   const state = createCareerState();
   state.restoreSnapshot(completeSnapshot({
     jobs: [completeJob("job-1")],
-    requirements: [{ id: "requirement-1", jobId: "job-1" }],
+    requirements: [completeRequirement("requirement-1", "job-1")],
     achievementMappings: [{
       id: "mapping-1",
       requirementId: "requirement-1",
@@ -691,7 +1091,7 @@ test("Job and future relationship snapshots are detached from internal state", (
   snapshot.achievementMappings[0].requirementId = "changed";
   assert.deepEqual(state.getSnapshot().jobs, [completeJob("job-1")]);
   assert.deepEqual(state.getSnapshot().requirements, [
-    { id: "requirement-1", jobId: "job-1" }
+    completeRequirement("requirement-1", "job-1")
   ]);
   assert.deepEqual(state.getSnapshot().achievementMappings, [{
     id: "mapping-1",
@@ -2083,6 +2483,25 @@ test("updates the profile while preserving its identity and creation time", () =
   assert.deepEqual(state.getProfile(), updated);
 });
 
+test("profile updates preserve provenance unless explicitly replaced", () => {
+  const state = createCareerState();
+  const provenance = [{ sources: ["cv", { excerpt: "original" }] }];
+  state.createProfile(profileInput({ provenance }), { id: "profile-1", createdAt });
+
+  const updated = state.updateProfile(profileInput({ fullName: "Updated name" }), updatedAt);
+  assert.deepEqual(updated.provenance, provenance);
+
+  updated.provenance[0].sources[1].excerpt = "changed";
+  assert.deepEqual(state.getProfile().provenance, provenance);
+
+  const replacement = [{ sources: ["updated source"] }];
+  const explicitlyUpdated = state.updateProfile(profileInput({
+    fullName: "Updated again",
+    provenance: replacement
+  }), updatedAt);
+  assert.deepEqual(explicitlyUpdated.provenance, replacement);
+});
+
 test("adds multiple employment records", () => {
   const state = createCareerState();
   const first = addEmployment(state, "employment-1");
@@ -2094,6 +2513,8 @@ test("adds multiple employment records", () => {
 
   assert.equal(first.id, "employment-1");
   assert.equal(second.id, "employment-2");
+  assert.deepEqual(first.startDate, { value: "2020-01-01", precision: "day" });
+  assert.deepEqual(second.endDate, { value: "2024-12-31", precision: "day" });
   assert.deepEqual(
     state.getEmploymentRecords().map(({ id }) => id),
     ["employment-1", "employment-2"]
@@ -2117,8 +2538,35 @@ test("updates one employment record without changing others", () => {
   assert.equal(updated.createdAt, createdAt);
   assert.equal(updated.updatedAt, updatedAt);
   assert.equal(updated.roleTitle, "Updated role");
+  assert.deepEqual(updated.startDate, { value: "2020-01-01", precision: "day" });
   assert.deepEqual(updated.responsibilities, ["Lead a team"]);
   assert.deepEqual(state.getEmploymentRecords()[1], second);
+});
+
+test("Employment updates preserve structured dates and isolate returned date objects", () => {
+  const state = createCareerState();
+  const initial = addEmployment(state, "employment-1");
+  const updated = state.updateEmploymentRecord("employment-1", employmentInput({
+    startDate: { value: "2020-03", precision: "month" },
+    endDate: { value: "2024", precision: "year" },
+    isCurrent: false
+  }), updatedAt);
+
+  assert.deepEqual(updated.startDate, { value: "2020-03", precision: "month" });
+  assert.deepEqual(updated.endDate, { value: "2024", precision: "year" });
+  assert.deepEqual(initial.startDate, { value: "2020-01-01", precision: "day" });
+
+  updated.startDate.value = "1999";
+  const records = state.getEmploymentRecords();
+  records[0].endDate.value = "1998";
+  assert.deepEqual(state.getEmploymentRecords()[0].startDate, {
+    value: "2020-03",
+    precision: "month"
+  });
+  assert.deepEqual(state.getEmploymentRecords()[0].endDate, {
+    value: "2024",
+    precision: "year"
+  });
 });
 
 test("deletes one employment record without affecting the others", () => {
@@ -2163,6 +2611,30 @@ test("adds, retrieves, updates, and deletes achievement records", () => {
 
   state.deleteAchievementRecord(first.id);
   assert.deepEqual(state.getAchievementRecords(), [second]);
+});
+
+test("Achievement updates preserve provenance unless explicitly replaced", () => {
+  const state = createCareerState();
+  const provenance = [{ sources: ["cv", { excerpt: "original" }] }];
+  addAchievement(state, "achievement-1", achievementInput({ provenance }));
+  provenance[0].sources[1].excerpt = "mutated input";
+
+  const updated = state.updateAchievementRecord("achievement-1", achievementInput({
+    title: "Updated achievement"
+  }), updatedAt);
+  assert.deepEqual(updated.provenance, [{ sources: ["cv", { excerpt: "original" }] }]);
+
+  updated.provenance[0].sources[1].excerpt = "changed result";
+  assert.deepEqual(state.getAchievementRecords()[0].provenance, [
+    { sources: ["cv", { excerpt: "original" }] }
+  ]);
+
+  const replacement = [{ source: "manual", excerpt: "replacement" }];
+  const explicitlyUpdated = state.updateAchievementRecord("achievement-1", achievementInput({
+    title: "Updated again",
+    provenance: replacement
+  }), updatedAt);
+  assert.deepEqual(explicitlyUpdated.provenance, replacement);
 });
 
 test("achievement content saves preserve or reset verification based on normalized changes", () => {
@@ -2220,7 +2692,7 @@ test("achievement content saves preserve or reset verification based on normaliz
   assert.equal(stillUnverified.verificationStatus, "unverified");
 });
 
-test("achievement content comparison handles nested objects, arrays, sparse slots, and cycles", () => {
+test("achievement content comparison handles nested objects and arrays", () => {
   const state = createCareerState();
   const evidence = [{ detail: "same", nested: { value: 1 } }, ["first", "second"]];
   const metrics = [
@@ -2267,71 +2739,22 @@ test("achievement content comparison handles nested objects, arrays, sparse slot
   );
   assert.equal(changedMetricOrder.verificationStatus, "unverified");
 
-  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
-  const sparseNestedArray = [];
-  sparseNestedArray.length = 1;
-  const sparse = state.updateAchievementRecord(
-    created.id,
-    achievementInput({
-      metrics: [...metrics].reverse(),
-      evidence: [{ detail: "same", nested: { value: 1 } }, sparseNestedArray]
-    }),
-    updatedAt
-  );
-  assert.equal(sparse.verificationStatus, "unverified");
-
-  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
-  const explicitUndefined = [undefined];
-  const explicitSlot = state.updateAchievementRecord(
-    created.id,
-    achievementInput({
-      metrics: [...metrics].reverse(),
-      evidence: [{ detail: "same", nested: { value: 1 } }, explicitUndefined]
-    }),
-    updatedAt
-  );
-  assert.equal(explicitSlot.verificationStatus, "unverified");
-
-  const cycleA = { label: "cycle" };
-  cycleA.self = cycleA;
-  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
-  const cyclic = state.updateAchievementRecord(
-    created.id,
-    achievementInput({
-      metrics: [...metrics].reverse(),
-      evidence: [{ detail: "same", nested: { value: 1 } }, sparseNestedArray, cycleA]
-    }),
-    updatedAt
-  );
-  assert.equal(cyclic.verificationStatus, "unverified");
-
-  state.updateAchievementVerificationStatus(created.id, "verified", updatedAt);
-  const cycleB = { label: "cycle" };
-  cycleB.self = cycleB;
-  const equivalentCycle = state.updateAchievementRecord(
-    created.id,
-    achievementInput({
-      metrics: [...metrics].reverse(),
-      evidence: [{ detail: "same", nested: { value: 1 } }, sparseNestedArray, cycleB]
-    }),
-    updatedAt
-  );
-  assert.equal(equivalentCycle.verificationStatus, "verified");
 });
 
-test("achievement content comparison uses Object.is for primitive evidence values", () => {
+test("achievement updates reject negative zero without mutating state", () => {
   const state = createCareerState();
   const existing = addAchievement(state, "achievement-1", achievementInput({
     evidence: [0]
   }));
   state.updateAchievementVerificationStatus(existing.id, "verified", updatedAt);
 
-  const updated = state.updateAchievementRecord(
+  const before = state.getSnapshot();
+  assert.throws(() => state.updateAchievementRecord(
     existing.id,
     achievementInput({ evidence: [-0] }),
     updatedAt
-  );
-  assert.equal(updated.verificationStatus, "unverified");
+  ), /faithfully represented/);
+  assert.deepEqual(state.getSnapshot(), before);
 });
 
 test("ordinary achievement content input cannot set verification status", () => {
@@ -2691,6 +3114,7 @@ test("returned achievement data cannot mutate nested internal state", () => {
         sources: ["updated", { details: [{ note: "updated evidence" }] }]
       }]
     }),
+    provenance: [],
     verificationStatus: "unverified",
     createdAt,
     updatedAt

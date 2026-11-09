@@ -206,35 +206,53 @@ For M6, compare generated output against known evidence and documented expected 
 
 ### CP-014 — Persistence and recovery
 
-- With an empty storage key, start with an empty in-memory Career Knowledge
-  Base and verify the version-1 envelope is written after the first successful
-  mutation.
-- Restore a valid version-1 envelope and confirm the profile, employment
-  records, and achievement records are available before the application
-  renders.
-- Validate the envelope structure and version, complete profile/employment/
-  achievement records, duplicate IDs, and employment relationships. Reject
-  invalid snapshots without partially restoring or normalizing records.
-- Confirm each successful profile, employment, and achievement mutation saves
-  the complete snapshot, including verification-status changes and employment
-  deletion updates to linked achievements.
-- Reload after saving and confirm the profile, employment records,
-  achievements, relationships, and verification statuses persist.
+- Current implementation baseline is snapshot v4. Restore a valid v4
+  envelope before rendering and verify `profile`, `employmentRecords`,
+  `achievementRecords`, `jobs`, `requirements`, `legacyRequirements`,
+  `achievementMappings`, `educationRecords`, `certificationRecords`, and
+  `import.sessions`, `import.completedBatches`, and `import.importReports`.
+  The new collections are containers, not complete import workflows.
+- Verify compatibility migrations v1 -> v2 -> v3 -> v4, v2 -> v3 -> v4,
+  and v3 -> v4. Confirm canonical/legacy Requirement classification, exact
+  Employment dates converted to day-precision structured values, and new
+  containers and missing provenance initialized empty. Migration loads must
+  not write; a later successful save writes the complete v4 snapshot.
+- Validate the envelope structure and version, complete records, duplicate
+  IDs, and supported relationships. Reject invalid snapshots without
+  partially restoring or normalizing records.
+- Confirm each changed state mutation attempts to save the complete snapshot,
+  including verification-status changes and employment-deletion updates to
+  linked achievements; no-op mutations do not save.
+- Reload after saving and confirm records, relationships, legacy entries,
+  and verification statuses persist.
 - For invalid JSON, malformed envelopes, invalid records, and unsupported
-  versions, verify the original stored value is preserved, the in-memory state
-  starts empty, no partial restore occurs, and writes to that key remain
-  disabled for the session.
-- Confirm failed restoration produces a persistent, understandable warning
-  that existing data could not be restored and current changes will not be
-  persisted.
+  versions, verify the original stored value is preserved, no partial restore
+  occurs, and writes to that key remain disabled for the session.
+- Confirm a failed initialization restore produces a persistent warning that
+  stored data could not be restored and current changes will not be persisted.
+- Public `restoreSnapshot()` regression coverage required (not yet implemented
+  as dedicated persistence integration tests):
+  - Invalid input leaves live state unchanged and performs no write.
+  - An ordinary persistence write failure yields `write-failed`, preserves
+    the previous stored value, and leaves the restored data in memory.
 - Confirm evidence values that cannot be faithfully represented by JSON are
   rejected at the persistence boundary without modifying in-memory evidence.
-- Simulate unavailable storage and failed writes. Verify successful in-memory
-  mutations remain usable, the user is told changes were not persisted, no
-  persistence-success feedback is shown, and the previous stored value is not
-  deleted before the write attempt.
-- Keep CP-043/CP-044 import/export scenarios separate; import/export is not
-  implemented by CP-014.
+- Simulate unavailable storage and failed ordinary writes. Verify successful
+  in-memory mutations remain usable, the user is told changes were not
+  persisted, no persistence-success feedback is shown, and the previous
+  stored value remains intact.
+- Verify an initial read failure disables saving for that persistence instance
+  even after storage recovers. Fresh initialization can reload existing data,
+  but unsaved in-memory changes are lost on reload. Verify read failures after
+  successful initialization remain retryable.
+- Verify historical negative zero in supported legacy Requirements remains
+  readable but write-protected, unsafe integer tokens are protected before
+  hydration, and unrepresentable historical dates do not overwrite stored data.
+- Verify sequential checks protect data observed during those checks; do not
+  claim cross-tab locking, compare-and-swap, stale-write detection, or atomic
+  coordination between independent writers.
+- Keep the planned import transaction scenarios separate below. Do not
+  treat ordinary mutation persistence as transactional.
 
 ## 6. M3 — Jobs & Evidence-Based Fit
 
@@ -253,9 +271,9 @@ For M6, compare generated output against known evidence and documented expected 
   Requirements and their achievement mappings while preserving Achievement
   and Employment History records.
 - `tests/career-persistence.test.js` and `tests/career-storage.test.js`: verify
-  Job mutations persist, v1 snapshots migrate through v2 to v3 with empty
+  Job mutations persist, v1 snapshots migrate through v2 and v3 to v4 with empty
   Jobs, Requirements, and achievement-mapping collections, v2 snapshots
-  migrate to v3, and a successful mutation writes the complete v3 envelope.
+  migrate through v3 to v4, and a successful mutation writes the complete v4 envelope.
 - Run `npm test` to execute the automated suite.
 
 #### Manual browser regression — pending
@@ -300,12 +318,13 @@ passed until run and reported.
   Achievement records. Also verify `legacyRequirements` survives restore,
   snapshots, and unrelated mutations without appearing in canonical CRUD
   results.
-- `tests/career-storage.test.js`: verify v1 → v2 → v3 and v2 → v3 migration,
-  v3 loading and round trips, Requirement classification and duplicate-ID
-  handling, legacy and mapping preservation, read-only loads, and safe
+- `tests/career-storage.test.js`: verify v1 → v2 → v3 → v4, v2 → v3 → v4,
+  and v3 → v4 migration, v4 loading and round trips, Requirement
+  classification and duplicate-ID handling, legacy and mapping preservation,
+  read-only loads, and safe
   failures for malformed Requirements and invalid envelopes.
 - `tests/career-persistence.test.js`: verify v1/v2 migration restores without
-  writing, later successful mutations persist the complete v3 snapshot,
+  writing, later successful mutations persist the complete v4 snapshot,
   legacy entries survive persistence, and failed loads do not overwrite
   stored data or enable writes.
 - No dedicated automated UI test was added.
@@ -351,7 +370,7 @@ passed until run and reported.
   selector states and resolved evidence grouping/counts, including orphaned
   mapping references.
 - `tests/career-storage.test.js` and `tests/career-persistence.test.js`:
-  verify v1 → v2 → v3 and v2 → v3 migration behavior, preservation of
+  verify v1 → v2 → v3 → v4 and v2 → v3 → v4 migration behavior, preservation of
   mappings present in v2 snapshots, v1's empty mapping collection, and
   persistence of restored mappings through later successful mutations.
 - No dedicated automated DOM/UI test harness exists; selector dialog,
@@ -432,6 +451,10 @@ version or test-environment details are recorded.
 - Verify responsive layout and keyboard/accessibility behavior.
 
 ## 7. M4 — Application Drafts & Review
+
+Drafts and Review are planned M4 functionality; the current UI sections are
+placeholders, and no Draft or Review model/workflow is implemented. Import
+approval, draft approval, and Achievement verification are separate actions.
 
 ### CP-030 — CV bullet templates
 
@@ -581,6 +604,9 @@ version or test-environment details are recorded.
 - Test irrelevant or instruction-like content in the source.
 - Confirm extracted content remains editable.
 - Confirm the original source remains available.
+- For CV Import, separately verify that source content is untrusted, English
+  and Russian are supported, and extraction produces editable candidates
+  rather than directly modifying career records.
 
 ### CP-062 — Grounded generation
 
@@ -613,6 +639,140 @@ Maintain a repeatable dataset containing:
 - Cases where the correct response is to ask for clarification.
 
 Record model or prompt version, expected behavior, actual result, and known limitations.
+
+### CV-001 — CV Import & Onboarding (planned workflow; not implemented)
+
+The v4 persistence envelope and migration are implemented and covered by
+existing tests; the CV Import domain workflows and coverage below remain
+planned. This section is not a report of existing automated or browser tests
+and must not be marked passed until executed.
+
+#### Models, provenance, and migration
+
+- Validate Education and Certification required fields, defaults, structured
+  dates, timestamps, URL protocol/absolute-URL rules, and chronology errors
+  versus warnings.
+- Validate structured dates at year, month, and day precision; reject
+  impossible Gregorian dates and years outside 0001-9999; preserve `null`
+  unknown dates. Test definitely reversed, overlapping/ambiguous,
+  future, and unusual date cases.
+- Validate Profile, Employment, Education, Certification, and Achievement
+  field-level provenance, 500-character excerpt limit, optional page,
+  association statuses, stable field paths/item IDs, defensive copying,
+  multiple excerpts per field, and one excerpt supporting multiple fields.
+- Verify provenance deletion leaves career values and Achievement
+  verification unchanged; verify deleting a career record cannot orphan its
+  provenance. Verify imported Achievements remain `unverified`.
+- Restore valid v1, v2, and v3 snapshots, validate each using its source
+  version contract, then migrate sequentially to v4. Confirm exact legacy
+  Employment date strings become day-precision structured dates, nulls
+  remain null, provenance defaults empty, new collections initialize empty,
+  and existing records, IDs, relationships, order, legacy Requirements,
+  and mappings are preserved.
+- Verify migration performs no storage write. Verify malformed historical
+  snapshots and unsupported versions preserve the original stored value and
+  are not partially migrated or overwritten.
+- Round-trip a complete v4 snapshot, including sessions, candidates,
+  decisions, idempotency markers, and minimal reports; reject invalid or
+  unknown fields according to the final v4 contract.
+
+#### Session and candidate lifecycle
+
+- Persist and restore sessions with `id`, `status`, `sourceDocument`,
+  `createdAt`, `expiresAt`, `lastActivityAt`, `currentCategory`,
+  `candidates`, `reviewDecisions`, and `processingAttempts` across reloads;
+  exercise all six session statuses and fixed seven-day expiry from creation,
+  including activity that
+  does not extend expiry.
+- Verify source-document metadata includes `id`, `fileName`, `mimeType`,
+  `language`, `uploadedAt`, `deleteBy`, and `status`; verify original CV
+  cleanup is independent of locally persisted session metadata.
+- Record separate processing attempts; retry failed extraction in the same
+  session and verify already-reviewed candidates are not overwritten.
+- Verify candidate `originalData` is immutable, `reviewedData` is editable,
+  edits trigger revalidation, provenance retains the extracted original
+  value, and supported associations change to `needs_review` after edits.
+- Verify valid/warning/invalid validation states, required warning
+  acknowledgement, stable validation error/warning codes, invalid-candidate
+  acceptance/merge rejection, partial category approval, and at-most-once
+  candidate import. Finalize the code catalog before asserting individual
+  code values.
+- Verify session expiry removes temporary candidates, unapproved provenance,
+  and pending decisions while preserving approved career records and their
+  provenance. Verify completed sessions retain only the minimal report.
+
+#### Duplicate review and atomic import
+
+- Verify duplicate suggestions are deterministic, explainable, advisory,
+  dismissible, and include target ID, similarity signals, and possible/strong
+  match levels.
+- Exercise explicit add, merge, and skip decisions. Verify merge requires a
+  target and per-field conflict choices, never merges automatically, and
+  requires renewed review if the target changes or is deleted.
+- Approve multiple candidates and categories in one transaction; verify only
+  explicitly approved candidates change career state and no pending
+  importable decision remains on completion.
+- Instrument the storage adapter to verify a successful batch performs
+  exactly one `setItem()` and publishes state only after that write succeeds.
+- Fail preparation, complete-snapshot validation, serialization, and
+  persistence separately. Verify each failure leaves previous in-memory
+  state and stored snapshot authoritative and does not report success.
+- Verify reports and idempotency markers persist in the same snapshot as
+  imported records and exclude original CV content and unapproved excerpts.
+- Verify same idempotency key and payload returns the original result, same
+  key with different payload is rejected, and an already-imported candidate
+  cannot be imported again.
+- Verify stale career/session revisions and changed merge targets block the
+  commit and require renewed review. Test revision increments once those
+  rules are specified.
+- Verify the exact payload identity and idempotency-key retention/collision
+  rules once their open design questions are resolved.
+
+#### Single-tab, backend, and browser behavior
+
+- Simulate an external snapshot change and verify a stale commit is blocked.
+  Verify unsupported single-tab coordination fails closed; do not treat
+  storage-event notification as cross-tab atomicity.
+- Validate upload type/size and request handling, malformed or adversarial
+  CV content, prompt-injection-like text, backend errors/timeouts, bounded
+  retries, and safe structured candidate output. Confirm no backend response
+  bypasses client review or writes career state. Verify extraction uses a
+  provider-independent adapter, OpenAI for initial real extraction
+  evaluation, and backend-only provider API keys; alternative providers may
+  be evaluated later.
+- Verify only PDF and DOCX are accepted and that extension, MIME type, file
+  signature, and size are independently checked. Test the configurable
+  initial 10 MB limit and boundary values.
+- Verify temporary uploads are outside the public web directory and use
+  server-generated safe filenames. Confirm original-file deletion after
+  successful processing and no later than 24 hours after upload.
+- Verify CV content cannot trigger tool execution, including prompt-injection-
+  like instructions. Confirm logs exclude CV contents, personal data, API
+  keys, and full sensitive prompts, and client-visible errors are sanitized.
+- Verify scanned and empty PDFs are detected and reported unsupported; no OCR
+  processing is performed.
+- Verify local development can run without multi-user authentication, while
+  any public-hosting configuration requires authentication, rate limiting,
+  HTTPS, restrictive CORS, and provider privacy review.
+- Use synthetic/anonymized CVs for development. Verify Gemini free-tier
+  evaluation is limited to synthetic/anonymized content; real extraction
+  evaluation uses the OpenAI paid API only after applicable terms are
+  reviewed.
+- Verify the original CV is deleted after successful processing and no later
+  than 24 hours after upload. Test deletion failure according to the
+  operational policy once specified.
+- Verify source excerpts display safely as text, are not editable, respect
+  the 500-character limit, and can be permanently deleted without changing
+  career values or verification.
+- Manual browser regression: upload one CV, review categories, edit a
+  candidate, acknowledge warnings, inspect excerpts, dismiss/resolve
+  duplicate suggestions, explicitly add/merge/skip, partially approve,
+  reload and resume a session, and confirm only approved records are
+  imported.
+- Manual browser regression: verify keyboard use, focus, accessible status
+  feedback, responsive layout, session expiry behavior, and distinction
+  between import approval, Achievement verification, and future draft
+  approval.
 
 ## 10. Test Execution Record
 

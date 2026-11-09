@@ -92,7 +92,7 @@ Do not mark a decision confirmed merely because it appears in this document.
 
 **Status:** Confirmed
 
-**Decision:** CP-014 uses browser `localStorage` to persist the Career Knowledge Base in one JSON envelope with version `1` and the fields `version`, `profile`, `employmentRecords`, and `achievementRecords`. The application saves the complete envelope after each successful state mutation and restores and validates the complete snapshot before rendering. Existing CP-010 through CP-013 record contracts remain unchanged.
+**Decision:** The original CP-014 implementation used browser `localStorage` to persist the Career Knowledge Base in one version-1 JSON envelope containing `profile`, `employmentRecords`, and `achievementRecords`. The current version-4 envelope and recovery behavior are described in the follow-up below.
 
 Stored JSON, envelope structure and version, records, duplicate IDs, and employment relationships must be validated before restoration. Invalid JSON, malformed envelopes, invalid records, and unsupported versions must not be partially restored or silently overwritten. When restoration fails for one of these reasons, the original stored value is preserved and writes to that storage key are disabled for the current session.
 
@@ -106,13 +106,37 @@ Evidence values that cannot be represented faithfully by JSON are rejected at th
 - Restoration must complete successfully before application views render from restored state.
 - Persistence failures must be clearly reported, and invalid or unsupported stored data must not be overwritten automatically.
 - Browser storage is not a secure cloud backup, and data may be lost if browser data is cleared.
-- Import/export and schema migration remain separate scope.
+- **Historical CP-014 scope:** import/export and schema migration remain
+  separate from that original persistence task.
 
-**CP-021 follow-up — 2026-11-06:** The current storage envelope is schema
-version 3. The storage layer supports v1 → v2 → v3 and v2 → v3 migrations.
-Loading and migration do not write to storage; a later successful mutation
-saves the complete v3 snapshot. Migration validation and failure safety are
-documented in `TECHNICAL_DESIGN.md`.
+**CP-021 follow-up — 2026-11-06:** Version 3 added legacy Requirement
+preservation and historical Requirement classification. This is a historical
+milestone; the current envelope is version 4.
+
+**CV-001 persistence follow-up:** The current version-4 envelope contains
+`profile`, `employmentRecords`, `achievementRecords`, `jobs`, `requirements`,
+`legacyRequirements`, `achievementMappings`, `educationRecords`,
+`certificationRecords`, and `import` with `sessions`, `completedBatches`,
+and `importReports`. The last three career/import containers are implemented
+as JSON-compatible storage containers, not complete Education, Certification,
+or CV Import workflows. The approved workflows and transaction semantics
+remain targets in `TECHNICAL_DESIGN.md`.
+
+Valid v1, v2, and v3 snapshots migrate sequentially to v4 in memory, without
+writing during load. The v2-to-v3 step classifies Requirements into canonical
+and legacy collections; v3-to-v4 converts exact Employment dates to structured
+day-precision values and adds the new containers and missing provenance arrays.
+Historical negative zero in supported legacy Requirements remains readable but
+write-protected; unsafe integer tokens and data that cannot safely migrate are
+protected rather than overwritten.
+
+An initial storage-read failure disables saving for that persistence instance.
+Recovery requires fresh initialization after storage becomes available;
+reloading does not recover unsaved in-memory changes. Read failures after a
+successful initialization can be retried. Sequential checks protect data
+observed during those checks, but independent concurrent writers are not
+coordinated: there is no cross-tab lock, compare-and-swap, stale-write
+detection, or atomic multi-writer guarantee.
 
 ### DEC-007 — Define the final domain schemas
 
@@ -139,6 +163,12 @@ supports creating, editing, and deleting Requirements, including for archived
 Jobs. Requirement deletion also removes its achievement mappings while
 preserving Achievement records. The finalized contract and behavior are
 documented in `TECHNICAL_DESIGN.md`; drafts and applications remain proposals.
+
+**CV-001 follow-up - 2026-11-09:** Separate Education and Certification
+records are approved for CV Import. Their target contracts, along with
+field-level provenance and structured Employment dates, are specified in
+`TECHNICAL_DESIGN.md`. This does not finalize Draft or Application schemas;
+those remain proposals.
 
 ### DEC-013 — Define Career Profile and Employment History schemas
 
@@ -317,23 +347,38 @@ mistaking the score for a hiring prediction.
 
 ### DEC-010 — Validate imported data before applying it
 
-**Status:** Confirmed in principle; import behavior open
+**Status:** Confirmed; JSON import/export behavior outside CV Import remains
+separate from the approved CV Import workflow.
 
 **Decision:** Imported JSON must be validated before it changes stored data.
 
-**Open questions:**
+**Historical open questions, resolved for CV Import by the 2026-11-09
+follow-up below:**
 
-- Should import replace existing data or merge records?
-- How should duplicate identifiers be handled?
-- How should unsupported schema versions be treated?
+- CV Import merges only explicitly approved candidates. Duplicate suggestions
+  are advisory; users explicitly choose add, merge, or skip. Merge requires a
+  target and explicit per-field conflict choices. No automatic merge occurs.
+- Candidate IDs and state relationships are validated before commit.
+- Unsupported or malformed snapshots are not overwritten; migration validates
+  each historical snapshot under its source-version contract.
 
-**Next step:** Decide and document the behavior before completing CP-044.
+**CV-001 follow-up - 2026-11-09:** One import session contains one CV.
+Review is guided by category and may be partially approved. Candidate data
+does not enter career state before explicit approval. A candidate may be
+imported at most once. A changed or deleted merge target requires renewed
+review. A completed session has no pending importable decisions.
+
+Import approval is distinct from Achievement verification and draft approval.
+Imported Achievements remain `unverified`; provenance does not verify claims.
+The detailed session and transaction rules are in `TECHNICAL_DESIGN.md`.
 
 ### DEC-011 — Choose an AI provider and architecture
 
-**Status:** Open
+**Status:** Partially confirmed; adapter and initial provider are approved
 
-**Problem:** AI features are planned, but provider selection and deployment architecture have not been finalized.
+**Problem:** The provider-independent LLM adapter and initial provider are
+approved. Exact model/version selection and future provider evaluation remain
+open. Hosting and public deployment are outside the initial CV Import MVP.
 
 **Considerations:**
 
@@ -344,7 +389,16 @@ mistaking the score for a hiring prediction.
 - Latency, failure behavior, and retry limits.
 - Ability to evaluate outputs consistently.
 
-**Next step:** Revisit during CP-060. Do not place provider secrets in frontend code.
+**CV-001 follow-up - 2026-11-09:** Keep the existing vanilla JavaScript
+frontend and local-first browser career storage. A Python + FastAPI backend
+handles CV upload, validation, parsing, LLM orchestration, candidate
+generation, and temporary-file cleanup only. It does not store approved
+career records or operate a career database. Backend output is untrusted
+candidate data, and only explicit user approval updates local career state.
+Use a provider-independent LLM adapter with OpenAI as the initial provider
+for real extraction evaluation. Provider API keys remain backend-only.
+Alternative providers may be evaluated later. The MVP does not include
+hosting, OCR, multi-user support, or a cloud career database.
 
 ### DEC-012 — Define draft history and versioning
 
@@ -359,6 +413,119 @@ mistaking the score for a hiring prediction.
 - Should users be able to restore an earlier version?
 
 **Next step:** Resolve during CP-032 and CP-033.
+
+### DEC-016 — Approve CV Import data and review contracts
+
+**Status:** Confirmed (2026-11-09)
+
+**Decision:** CV Import handles one CV per locally persisted import session.
+The session statuses are `processing`, `ready_for_review`,
+`review_in_progress`, `import_completed`, `failed`, and `expired`. Sessions
+expire seven days after creation; activity does not extend expiry. Processing
+attempts are recorded separately. A failed extraction may be retried in the
+same session, but retry must not overwrite candidates already reviewed.
+
+The approved session fields are `id`, `status`, `sourceDocument`,
+`createdAt`, `expiresAt`, `lastActivityAt`, `currentCategory`, `candidates`,
+`reviewDecisions`, and `processingAttempts`. Source-document metadata has
+`id`, `fileName`, `mimeType`, `language`, `uploadedAt`, `deleteBy`, and
+`status`.
+
+Candidates belong to `profile`, `employment`, `education`, `certification`,
+`skill`, or `achievement`. Each candidate has `id`, `category`,
+`originalData`, `reviewedData`, `fieldProvenance`, `validation`,
+`reviewStatus`, and `possibleDuplicates`. `originalData` is immutable;
+`reviewedData` is editable and editing triggers revalidation. Validation is
+`valid`, `warning`, or `invalid`; review status is `pending`, `accepted`,
+`rejected`, or `merged`. Invalid candidates cannot be accepted or merged;
+warnings require explicit acknowledgement. Validation findings use stable
+error and warning codes; the code catalog remains an implementation detail.
+Partial category approval is supported, and candidates are imported at most
+once.
+
+Provenance retains the original extracted value. Editing a supported value
+changes its association status to `needs_review`. Approved provenance
+survives session expiry; unapproved provenance is removed on expiry.
+
+Duplicate detection is deterministic, explainable, advisory, and dismissible.
+Suggestions identify a target record, similarity signals, and `possible` or
+`strong` match level. Decisions are `add`, `merge`, or `skip`. Merge requires
+an explicit target and per-field conflict choices; no automatic merge occurs.
+
+Field-level provenance records `id`, `sourceDocumentId`, `sourceType: "cv"`,
+`fieldPath`, `extractedValue`, `excerpt`, `language`,
+`associationStatus`, and `createdAt`, with optional `page`. Association
+statuses are `supports`, `needs_review`, and `context_only`. Excerpts are at
+most 500 characters; multiple excerpts may support one field and one excerpt
+may support multiple fields. Excerpts are not manually editable, but users
+may permanently delete provenance. Provenance is distinct from Achievement
+evidence and never verifies a claim. Stable field paths and item IDs are used
+instead of permanent array-index references. Editing a supported value marks
+its association `needs_review`. Deleting provenance does not change career
+values or verification status, and deleting a career record must not leave
+orphaned provenance.
+
+The original CV is deleted after successful processing and no later than
+24 hours after upload. Session expiry removes temporary candidates,
+unapproved provenance, and pending decisions. Approved records and their
+provenance survive expiry. Completed sessions retain a minimal import report.
+The report excludes original CV content and unapproved excerpts. English and
+Russian are the initial supported languages.
+
+**Consequences:**
+
+- Education and Certification have dedicated career-record contracts.
+- Import approval, draft approval, Achievement verification, and provenance
+  association status remain separate concepts.
+- Skill candidates are supported, but a standalone Skill record schema and
+  exact deduplication rules are not finalized; these remain open technical
+  details in `TECHNICAL_DESIGN.md`.
+
+### DEC-017 — Commit approved imports as one snapshot transaction
+
+**Status:** Confirmed (2026-11-09)
+
+**Decision:** An approved batch follows `prepare -> validate -> persist ->
+publish`. The conceptual state API is:
+
+```js
+commitApprovedImport({
+  importSessionId,
+  expectedCareerRevision,
+  expectedSessionRevision,
+  idempotencyKey,
+  payloadIdentity,
+  approvedChanges,
+  report
+})
+```
+
+The operation prepares all changes without mutating live state, validates the
+complete next snapshot, and persists the complete snapshot with one
+`localStorage.setItem()` call. It publishes the new in-memory state only
+after persistence succeeds. Preparation or persistence failure leaves the
+previous in-memory and persisted state authoritative. Existing sequential
+CRUD operations must not implement an import batch.
+
+An identical idempotency key and payload returns the original result; reuse
+of a key for a different payload is rejected. Already-imported candidates
+cannot be imported again. Stale revisions or changed merge targets block the
+commit and require renewed review. A completed report records batch/session/
+key, completion, candidate IDs, counts, record IDs, and non-sensitive
+warnings.
+
+The single-key write is the import commit boundary, not a distributed
+transaction or guaranteed filesystem durability. The MVP permits one browser
+tab to modify data. External snapshot changes must be detected and stale
+commits blocked. The application must not claim cross-tab atomicity; if it
+cannot safely enforce the single-tab assumption, it must fail closed instead
+of silently overwriting newer data.
+
+**Unresolved implementation details:** Canonical payload serialization/hash,
+idempotency-key retention and collision handling, revision increments for
+normal and import mutations, and the mechanism/fallback for enforcing the
+single-tab writer constraint remain open. The complete target behavior and
+failure semantics are specified in `TECHNICAL_DESIGN.md`.
 
 ## 4. Decision Change Process
 
