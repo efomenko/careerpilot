@@ -970,6 +970,32 @@ and choice completeness, lifecycle transitions, revalidation, cleanup, and
 edit tracking require later workflows and are not enforced by these standalone
 models.
 
+CV-006 state methods create and retrieve sessions, append processing candidates,
+set the current category, update candidate review data and decisions, retry a
+failed session, and explicitly expire it. Callers supply activity timestamps;
+the state rejects ordinary updates at or after `expiresAt`. Allowed transitions
+are `processing` to `ready_for_review` or `failed`, `ready_for_review` to
+`review_in_progress`, and any non-completed active state to `expired` at or
+after expiry. Retry is the only transition from `failed` to `processing` and
+appends a supplied attempt without replacing candidates. Completion remains
+reserved for a later import transaction.
+
+Edits supply a fresh validation result, reset the candidate decision, and mark
+changed supported provenance as `needs_review`. State resolves provenance
+paths as dot-separated object properties; paths it cannot resolve structurally
+are rejected rather than silently ignored. Warning candidates require an
+explicit acknowledgement argument at the time of an add or merge decision;
+the acknowledgement is not stored separately. State validates the provided
+result but does not independently compute findings or verify merge conflicts.
+Session mutations use the existing persistence callback and save-outcome
+tracking. Snapshot collections remain opaque on load; individual sessions are
+validated when accessed or changed.
+
+Explicit expiry marks the session expired and blocks subsequent edits while
+retaining candidates, provenance, and decisions. Removal of temporary data
+and other expiry cleanup are deferred to CV-016; this state API neither
+deletes backend files nor commits approved records.
+
 ### 16.5 Field-level provenance and structured dates
 
 Each provenance item has:

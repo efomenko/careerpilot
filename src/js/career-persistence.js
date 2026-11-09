@@ -62,7 +62,8 @@ const mutationMethods = new Set([
   "updateAchievementVerificationStatus", "deleteAchievementRecord", "createJob",
   "updateJob", "archiveJob", "reactivateJob", "deleteJob", "createRequirement",
   "updateRequirement", "deleteRequirement", "createAchievementMapping", "deleteAchievementMapping",
-  "restoreSnapshot"
+  "restoreSnapshot", "createImportSession", "transitionImportSession", "retryImportSession",
+  "addImportCandidates", "setImportCategory", "updateImportCandidate", "decideImportCandidate"
 ]);
 
 const trackedStates = new WeakSet();

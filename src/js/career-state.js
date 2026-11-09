@@ -12,6 +12,8 @@ import { validateJobRecord } from "./job-model.js";
 import { validateRequirementRecord } from "./requirement-model.js";
 import { validateAchievementMappingRecord } from "./achievement-mapping-model.js";
 import { calculateJobFitAssessment as calculateFitAssessment } from "./fit-assessment-helpers.js";
+import { createImportSession, createImportCandidate, validateImportSession } from "./import-model.js";
+import { isUtcTimestamp } from "./model-validation.js";
 
 function copyProfile(profile) {
   return profile ? copyNestedData(profile) : null;
@@ -727,6 +729,60 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
     }
   }
 
+  function importSessionIndex(id) {
+    const matches = [];
+    for (let index = 0; index < importData.sessions.length; index += 1) {
+      if (importData.sessions[index]?.id === id) matches.push(index);
+    }
+    if (matches.length !== 1) throw new Error(`Import session "${id}" is missing or ambiguous.`);
+    const record = importData.sessions[matches[0]];
+    const result = validateImportSession(record);
+    if (!result.valid) throwValidationError("Import session", result.errors);
+    return matches[0];
+  }
+
+  function importTime(record, at, expiring = false) {
+    if (!isUtcTimestamp(at) || at < record.lastActivityAt) {
+      throw new TypeError("Import activity must use a valid UTC timestamp not earlier than lastActivityAt.");
+    }
+    if (record.status === "expired" || record.status === "import_completed") {
+      throw new Error("This import session is not editable.");
+    }
+    if (expiring ? at < record.expiresAt : at >= record.expiresAt) {
+      throw new Error(expiring ? "The import session has not expired." : "The import session has expired.");
+    }
+  }
+
+  function updateImportSession(index, replacement) {
+    const result = validateImportSession(replacement);
+    if (!result.valid) throwValidationError("Import session", result.errors);
+    importData.sessions[index] = copyNestedData(replacement);
+    const output = copyNestedData(importData.sessions[index]);
+    notifyMutation();
+    return output;
+  }
+
+  function candidateIndex(session, id) {
+    const matches = session.candidates.map((item, index) => item.id === id ? index : -1).filter((index) => index >= 0);
+    if (matches.length !== 1) throw new Error(`Import candidate "${id}" is missing or ambiguous.`);
+    return matches[0];
+  }
+
+  function reviewField(data, path) {
+    const segments = path.split(".");
+    if (segments.some((part) => !part || /[\[\]\/]/.test(part))) {
+      throw new Error(`Cannot resolve provenance field path "${path}".`);
+    }
+    let value = data;
+    for (const part of segments) {
+      if (value === null || typeof value !== "object" || Array.isArray(value) || !Object.hasOwn(value, part)) {
+        return { present: false };
+      }
+      value = value[part];
+    }
+    return { present: true, value };
+  }
+
   const state = {
     restoreSnapshot(snapshot) {
       if (!isFresh) {
@@ -782,6 +838,128 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
         certificationRecords,
         import: importData
       }).snapshot;
+    },
+
+    getImportSessions() {
+      return copyNestedData(importData.sessions);
+    },
+
+    getImportSession(id) {
+      return copyNestedData(importData.sessions[importSessionIndex(id)]);
+    },
+
+    createImportSession(record) {
+      const session = createImportSession(record);
+      if (session.status !== "processing") throw new Error("New import sessions must be processing.");
+      if (importData.sessions.some((item) => item?.id === session.id)) throw new Error("Duplicate import session ID.");
+      if (new Set(session.candidates.map((item) => item.id)).size !== session.candidates.length) {
+        throw new Error("Duplicate import candidate ID.");
+      }
+      if (session.candidates.some((item) => item.reviewStatus !== "pending") || session.reviewDecisions.length) {
+        throw new Error("New import sessions cannot contain review decisions.");
+      }
+      importData.sessions.push(copyNestedData(session));
+      const result = copyNestedData(session);
+      notifyMutation();
+      return result;
+    },
+
+    transitionImportSession(id, status, at) {
+      const index = importSessionIndex(id);
+      const session = importData.sessions[index];
+      importTime(session, at, status === "expired");
+      const allowed = {
+        processing: ["ready_for_review", "failed", "expired"],
+        ready_for_review: ["review_in_progress", "expired"],
+        review_in_progress: ["expired"],
+        failed: ["expired"]
+      };
+      if (!allowed[session.status]?.includes(status)) throw new Error("Invalid import session transition.");
+      return updateImportSession(index, { ...session, status, lastActivityAt: at });
+    },
+
+    retryImportSession(id, attempt, at) {
+      const index = importSessionIndex(id);
+      const session = importData.sessions[index];
+      importTime(session, at);
+      if (session.status !== "failed") throw new Error("Only failed sessions can be retried.");
+      const detached = copyNestedData(attempt);
+      if (!isPlainObject(detached)) throw new TypeError("Processing attempt must be an object.");
+      return updateImportSession(index, {
+        ...session, status: "processing", lastActivityAt: at,
+        processingAttempts: [...session.processingAttempts, detached]
+      });
+    },
+
+    addImportCandidates(id, candidates, at) {
+      const index = importSessionIndex(id);
+      const session = importData.sessions[index];
+      importTime(session, at);
+      if (session.status !== "processing") throw new Error("Candidates can only be added while processing.");
+      if (!Array.isArray(candidates)) throw new TypeError("Candidates must be an array.");
+      const additions = copyNestedData(candidates).map((item) => createImportCandidate(item));
+      if (additions.some((item) => item.reviewStatus !== "pending")) throw new Error("New candidates must be pending.");
+      const ids = [...session.candidates, ...additions].map((item) => item.id);
+      if (new Set(ids).size !== ids.length) throw new Error("Duplicate import candidate ID.");
+      return updateImportSession(index, {
+        ...session, candidates: [...session.candidates, ...additions], lastActivityAt: at
+      });
+    },
+
+    setImportCategory(id, category, at) {
+      const index = importSessionIndex(id);
+      const session = importData.sessions[index];
+      importTime(session, at);
+      if (!["ready_for_review", "review_in_progress"].includes(session.status)) throw new Error("Session is not ready for review.");
+      return updateImportSession(index, { ...session, currentCategory: category, lastActivityAt: at });
+    },
+
+    updateImportCandidate(id, candidateId, reviewedData, validation, at) {
+      const index = importSessionIndex(id);
+      const session = importData.sessions[index];
+      importTime(session, at);
+      if (session.status !== "review_in_progress") throw new Error("Session is not in review.");
+      const itemIndex = candidateIndex(session, candidateId);
+      const current = session.candidates[itemIndex];
+      const data = copyNestedData(reviewedData);
+      const provenance = copyNestedData(current.fieldProvenance);
+      for (const [path, items] of Object.entries(provenance)) {
+        const before = reviewField(current.reviewedData, path);
+        const after = reviewField(data, path);
+        if (!areValuesEqual(before, after)) {
+          for (const item of items) if (item.associationStatus === "supports") item.associationStatus = "needs_review";
+        }
+      }
+      const updated = createImportCandidate({
+        ...current, reviewedData: data, validation: copyNestedData(validation),
+        fieldProvenance: provenance, reviewStatus: "pending"
+      });
+      const candidates = [...session.candidates];
+      candidates[itemIndex] = updated;
+      return updateImportSession(index, {
+        ...session, candidates, reviewDecisions: session.reviewDecisions.filter((item) => item.candidateId !== candidateId),
+        lastActivityAt: at
+      });
+    },
+
+    decideImportCandidate(id, decision, at, { acknowledgeWarnings = false } = {}) {
+      const index = importSessionIndex(id);
+      const session = importData.sessions[index];
+      importTime(session, at);
+      if (session.status !== "review_in_progress") throw new Error("Session is not in review.");
+      const detached = copyNestedData(decision);
+      if (!isPlainObject(detached)) throw new TypeError("Review decision must be an object.");
+      const itemIndex = candidateIndex(session, detached.candidateId);
+      const item = session.candidates[itemIndex];
+      if (["add", "merge"].includes(detached.action) && item.validation.status === "warning" && acknowledgeWarnings !== true) {
+        throw new Error("Warnings must be acknowledged.");
+      }
+      const status = { add: "accepted", merge: "merged", skip: "rejected" }[detached.action];
+      if (!status) throw new Error("Invalid review decision action.");
+      const candidates = [...session.candidates];
+      candidates[itemIndex] = createImportCandidate({ ...item, reviewStatus: status });
+      const reviewDecisions = [...session.reviewDecisions.filter((entry) => entry.candidateId !== item.id), detached];
+      return updateImportSession(index, { ...session, candidates, reviewDecisions, lastActivityAt: at });
     },
 
     createProfile(input, metadata) {
