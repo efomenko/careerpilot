@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createAchievementMappingRecord } from "../src/js/achievement-mapping-model.js";
 import { createCareerState } from "../src/js/career-state.js";
+import { createJobRecord } from "../src/js/job-model.js";
+import { createRequirementRecord } from "../src/js/requirement-model.js";
 
 const createdAt = "2025-04-20T14:30:00.000Z";
 const updatedAt = "2025-05-01T09:15:00.000Z";
@@ -1018,6 +1021,412 @@ test("recalculates current assessment after mapping, verification, content, and 
   assert.equal(calculate().score, 0);
   assert.equal("fitAssessments" in state.getSnapshot(), false);
   assert.equal(notifications.length, 6);
+});
+
+test("integrates Job matching lifecycle with verification-aware Fit Assessment", () => {
+  const state = createCareerState();
+  state.createJob(createJobRecord({
+    company: "Example Company",
+    roleTitle: "Engineer"
+  }, {
+    id: "job-1",
+    createdAt
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-1",
+    description: "Mandatory requirement",
+    category: "experience",
+    importance: "mandatory"
+  }, {
+    id: "requirement-mandatory",
+    createdAt
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-1",
+    description: "Preferred requirement",
+    category: "skill",
+    importance: "preferred"
+  }, {
+    id: "requirement-preferred",
+    createdAt
+  }));
+  addAchievement(state, "achievement-mandatory", achievementInput({
+    title: "Verified achievement"
+  }));
+  addAchievement(state, "achievement-preferred", achievementInput({
+    title: "Unverified achievement"
+  }));
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-mandatory",
+    achievementId: "achievement-mandatory"
+  }, {
+    id: "mapping-mandatory",
+    createdAt
+  }));
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-preferred",
+    achievementId: "achievement-preferred"
+  }, {
+    id: "mapping-preferred",
+    createdAt
+  }));
+  state.updateAchievementVerificationStatus(
+    "achievement-mandatory",
+    "verified",
+    updatedAt
+  );
+
+  const partialAssessment = state.calculateJobFitAssessment("job-1");
+  const mandatoryResult = partialAssessment.requirementResults.find(
+    ({ requirementId }) => requirementId === "requirement-mandatory"
+  );
+  const preferredResult = partialAssessment.requirementResults.find(
+    ({ requirementId }) => requirementId === "requirement-preferred"
+  );
+
+  assert.equal(partialAssessment.status, "assessed");
+  assert.equal(partialAssessment.score, (2 / 3) * 100);
+  assert.equal(partialAssessment.supportedRequirementCount, 1);
+  assert.equal(partialAssessment.totalRequirementCount, 2);
+  assert.equal(partialAssessment.supportedMandatoryCount, 1);
+  assert.equal(partialAssessment.totalMandatoryCount, 1);
+  assert.equal(mandatoryResult.status, "supported");
+  assert.deepEqual(mandatoryResult.verifiedAchievementIds, ["achievement-mandatory"]);
+  assert.deepEqual(mandatoryResult.unverifiedAchievementIds, []);
+  assert.equal(preferredResult.status, "unsupported");
+  assert.deepEqual(preferredResult.verifiedAchievementIds, []);
+  assert.deepEqual(preferredResult.unverifiedAchievementIds, ["achievement-preferred"]);
+
+  state.updateAchievementVerificationStatus(
+    "achievement-preferred",
+    "verified",
+    "2025-05-02T09:15:00.000Z"
+  );
+
+  const completeAssessment = state.calculateJobFitAssessment("job-1");
+
+  assert.equal(completeAssessment.status, "assessed");
+  assert.equal(completeAssessment.score, 100);
+  assert.equal(completeAssessment.supportedRequirementCount, 2);
+  assert.equal(completeAssessment.totalRequirementCount, 2);
+  assert.equal(completeAssessment.supportedMandatoryCount, 1);
+  assert.equal(completeAssessment.totalMandatoryCount, 1);
+  assert.deepEqual(
+    completeAssessment.requirementResults
+      .find(({ requirementId }) => requirementId === "requirement-mandatory")
+      .verifiedAchievementIds,
+    ["achievement-mandatory"]
+  );
+  assert.deepEqual(
+    completeAssessment.requirementResults
+      .find(({ requirementId }) => requirementId === "requirement-preferred")
+      .verifiedAchievementIds,
+    ["achievement-preferred"]
+  );
+  assert.deepEqual(
+    completeAssessment.requirementResults
+      .flatMap(({ unverifiedAchievementIds }) => unverifiedAchievementIds),
+    []
+  );
+});
+
+test("recalculates assessment after Achievement deletion removes mapped evidence", () => {
+  const state = createCareerState();
+  state.createJob(createJobRecord({
+    company: "Example Company",
+    roleTitle: "Engineer"
+  }, {
+    id: "job-1",
+    createdAt
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-1",
+    description: "Retained mandatory requirement",
+    category: "experience",
+    importance: "mandatory"
+  }, {
+    id: "requirement-keep",
+    createdAt
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-1",
+    description: "Requirement losing its evidence",
+    category: "skill",
+    importance: "preferred"
+  }, {
+    id: "requirement-delete-evidence",
+    createdAt: updatedAt
+  }));
+  addAchievement(state, "achievement-keep");
+  addAchievement(state, "achievement-delete");
+  state.updateAchievementVerificationStatus("achievement-keep", "verified", updatedAt);
+  state.updateAchievementVerificationStatus("achievement-delete", "verified", updatedAt);
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-keep",
+    achievementId: "achievement-keep"
+  }, {
+    id: "mapping-keep",
+    createdAt
+  }));
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-delete-evidence",
+    achievementId: "achievement-delete"
+  }, {
+    id: "mapping-delete",
+    createdAt
+  }));
+
+  assert.equal(state.calculateJobFitAssessment("job-1").score, 100);
+
+  state.deleteAchievementRecord("achievement-delete");
+
+  assert.deepEqual(
+    state.getAchievementRecords().map(({ id }) => id),
+    ["achievement-keep"]
+  );
+  assert.deepEqual(
+    state.getRequirements("job-1").map(({ id }) => id),
+    ["requirement-keep", "requirement-delete-evidence"]
+  );
+  assert.deepEqual(
+    state.getSnapshot().achievementMappings.map(({ id }) => id),
+    ["mapping-keep"]
+  );
+
+  const assessment = state.calculateJobFitAssessment("job-1");
+  const retainedResult = assessment.requirementResults.find(
+    ({ requirementId }) => requirementId === "requirement-keep"
+  );
+  const evidenceRemovedResult = assessment.requirementResults.find(
+    ({ requirementId }) => requirementId === "requirement-delete-evidence"
+  );
+
+  assert.equal(assessment.score, (2 / 3) * 100);
+  assert.equal(assessment.supportedRequirementCount, 1);
+  assert.equal(assessment.totalRequirementCount, 2);
+  assert.equal(assessment.supportedMandatoryCount, 1);
+  assert.equal(assessment.totalMandatoryCount, 1);
+  assert.equal(retainedResult.status, "supported");
+  assert.deepEqual(retainedResult.verifiedAchievementIds, ["achievement-keep"]);
+  assert.equal(evidenceRemovedResult.status, "unsupported");
+  assert.deepEqual(evidenceRemovedResult.verifiedAchievementIds, []);
+  assert.deepEqual(evidenceRemovedResult.unverifiedAchievementIds, []);
+});
+
+test("recalculates assessment after Requirement deletion removes its mappings", () => {
+  const state = createCareerState();
+  state.createJob(createJobRecord({
+    company: "Example Company",
+    roleTitle: "Engineer"
+  }, {
+    id: "job-1",
+    createdAt
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-1",
+    description: "Deleted mandatory requirement",
+    category: "experience",
+    importance: "mandatory"
+  }, {
+    id: "requirement-delete",
+    createdAt
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-1",
+    description: "Remaining mandatory requirement",
+    category: "skill",
+    importance: "mandatory"
+  }, {
+    id: "requirement-unsupported",
+    createdAt: updatedAt
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-1",
+    description: "Remaining preferred requirement",
+    category: "education",
+    importance: "preferred"
+  }, {
+    id: "requirement-supported",
+    createdAt: "2025-05-02T09:15:00.000Z"
+  }));
+  addAchievement(state, "achievement-delete");
+  addAchievement(state, "achievement-unsupported");
+  addAchievement(state, "achievement-supported");
+  state.updateAchievementVerificationStatus("achievement-delete", "verified", updatedAt);
+  state.updateAchievementVerificationStatus(
+    "achievement-supported",
+    "verified",
+    updatedAt
+  );
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-delete",
+    achievementId: "achievement-delete"
+  }, {
+    id: "mapping-delete",
+    createdAt
+  }));
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-unsupported",
+    achievementId: "achievement-unsupported"
+  }, {
+    id: "mapping-unsupported",
+    createdAt: updatedAt
+  }));
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-supported",
+    achievementId: "achievement-supported"
+  }, {
+    id: "mapping-supported",
+    createdAt: "2025-05-02T09:15:00.000Z"
+  }));
+
+  assert.equal(state.calculateJobFitAssessment("job-1").score, 60);
+
+  state.deleteRequirement("requirement-delete");
+
+  assert.deepEqual(
+    state.getRequirements("job-1").map(({ id }) => id),
+    ["requirement-unsupported", "requirement-supported"]
+  );
+  assert.deepEqual(
+    state.getSnapshot().achievementMappings.map(({ id }) => id),
+    ["mapping-unsupported", "mapping-supported"]
+  );
+  assert.deepEqual(
+    state.getAchievementRecords().map(({ id }) => id),
+    ["achievement-delete", "achievement-unsupported", "achievement-supported"]
+  );
+
+  const assessment = state.calculateJobFitAssessment("job-1");
+
+  assert.equal(assessment.score, (1 / 3) * 100);
+  assert.equal(assessment.supportedRequirementCount, 1);
+  assert.equal(assessment.totalRequirementCount, 2);
+  assert.equal(assessment.supportedMandatoryCount, 0);
+  assert.equal(assessment.totalMandatoryCount, 1);
+  assert.deepEqual(
+    assessment.requirementResults.map(({ requirementId }) => requirementId),
+    ["requirement-unsupported", "requirement-supported"]
+  );
+  assert.deepEqual(
+    assessment.requirementResults
+      .flatMap(({ verifiedAchievementIds }) => verifiedAchievementIds),
+    ["achievement-supported"]
+  );
+});
+
+test("recalculates the surviving Job assessment after Job cascade deletion", () => {
+  const state = createCareerState();
+  state.createJob(createJobRecord({
+    company: "Deleted Company",
+    roleTitle: "Deleted Role"
+  }, {
+    id: "job-delete",
+    createdAt
+  }));
+  state.createJob(createJobRecord({
+    company: "Retained Company",
+    roleTitle: "Retained Role"
+  }, {
+    id: "job-keep",
+    createdAt: updatedAt
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-delete",
+    description: "Deleted Job requirement one",
+    category: "experience",
+    importance: "mandatory"
+  }, {
+    id: "requirement-delete-1",
+    createdAt
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-delete",
+    description: "Deleted Job requirement two",
+    category: "skill",
+    importance: "preferred"
+  }, {
+    id: "requirement-delete-2",
+    createdAt: updatedAt
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-keep",
+    description: "Retained Job requirement",
+    category: "education",
+    importance: "mandatory"
+  }, {
+    id: "requirement-keep",
+    createdAt: "2025-05-02T09:15:00.000Z"
+  }));
+  addAchievement(state, "achievement-delete-1");
+  addAchievement(state, "achievement-delete-2");
+  addAchievement(state, "achievement-keep");
+  state.updateAchievementVerificationStatus("achievement-delete-1", "verified", updatedAt);
+  state.updateAchievementVerificationStatus("achievement-delete-2", "verified", updatedAt);
+  state.updateAchievementVerificationStatus("achievement-keep", "verified", updatedAt);
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-delete-1",
+    achievementId: "achievement-delete-1"
+  }, {
+    id: "mapping-delete-1",
+    createdAt
+  }));
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-delete-2",
+    achievementId: "achievement-delete-2"
+  }, {
+    id: "mapping-delete-2",
+    createdAt: updatedAt
+  }));
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-keep",
+    achievementId: "achievement-keep"
+  }, {
+    id: "mapping-keep",
+    createdAt: "2025-05-02T09:15:00.000Z"
+  }));
+
+  assert.deepEqual(state.deleteJob("job-delete"), {
+    jobId: "job-delete",
+    deletedRequirements: 2,
+    deletedAchievementMappings: 2
+  });
+
+  assert.deepEqual(state.getJobs().map(({ id }) => id), ["job-keep"]);
+  assert.deepEqual(
+    state.getRequirements("job-keep").map(({ id }) => id),
+    ["requirement-keep"]
+  );
+  assert.deepEqual(
+    state.getSnapshot().requirements.map(({ id }) => id),
+    ["requirement-keep"]
+  );
+  assert.deepEqual(
+    state.getSnapshot().achievementMappings.map(({ id }) => id),
+    ["mapping-keep"]
+  );
+  assert.deepEqual(
+    state.getAchievementRecords().map(({ id }) => id),
+    ["achievement-delete-1", "achievement-delete-2", "achievement-keep"]
+  );
+
+  const assessment = state.calculateJobFitAssessment("job-keep");
+
+  assert.equal(assessment.status, "assessed");
+  assert.equal(assessment.score, 100);
+  assert.equal(assessment.supportedRequirementCount, 1);
+  assert.equal(assessment.totalRequirementCount, 1);
+  assert.equal(assessment.supportedMandatoryCount, 1);
+  assert.equal(assessment.totalMandatoryCount, 1);
+  assert.deepEqual(
+    assessment.requirementResults[0].verifiedAchievementIds,
+    ["achievement-keep"]
+  );
+  assert.throws(
+    () => state.calculateJobFitAssessment("job-delete"),
+    (error) => error.code === "NOT_FOUND"
+      && error.message === 'Job "job-delete" does not exist.'
+  );
 });
 
 test("failed mutations leave calculated assessment unchanged", () => {

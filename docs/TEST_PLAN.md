@@ -394,12 +394,20 @@ the complete Achievement deletion confirmation checklist passed.
   data gathered through public state APIs, verified-only support, isolation
   between Jobs sharing an Achievement, and fresh results after mapping
   creation/deletion, verification changes, content edits that reset
-  verification, and Requirement importance updates. Verify failed mutations
-  preserve assessment results, calculation does not notify subscribers or
-  mutate source records, and snapshots do not contain `fitAssessments`.
-- `tests/career-persistence.test.js`: verify persisted snapshots do not
-  contain `fitAssessments`.
-- Full automated test suite: 341 passed, 0 failed.
+  verification, and Requirement importance updates. The integrated Job
+  matching lifecycle verifies Mandatory/Preferred weighting and
+  verification-aware evidence before and after a verification change.
+  Verify that Achievement deletion removes mapped evidence, Requirement
+  deletion removes its mappings, and Job deletion recalculates the surviving
+  Job's assessment while preserving unrelated records. Also verify failed
+  mutations preserve assessment results, calculation does not notify
+  subscribers or mutate source records, and snapshots do not contain
+  `fitAssessments`.
+- `tests/career-persistence.test.js`: verify save/reload restoration of Jobs,
+  Requirements, Achievements, mappings, and verification statuses, followed
+  by Fit Assessment recalculation from restored source records rather than
+  persisted assessment data.
+- Full automated test suite: 346 passed, 0 failed.
 
 #### Manual browser regression — completed
 

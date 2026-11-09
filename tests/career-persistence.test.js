@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createAchievementMappingRecord } from "../src/js/achievement-mapping-model.js";
 import { createCareerPersistence } from "../src/js/career-persistence.js";
+import { createJobRecord } from "../src/js/job-model.js";
+import { createRequirementRecord } from "../src/js/requirement-model.js";
 
 const timestamp = "2025-04-20T14:30:00.000Z";
 const storageKey = "careerpilot.state";
@@ -572,6 +575,160 @@ test("verification changes and employment deletion are persisted correctly", () 
   assert.deepEqual(saved.employmentRecords, []);
   assert.equal(saved.achievementRecords[0].employmentId, null);
   assert.equal(saved.achievementRecords[0].verificationStatus, "unverified");
+});
+
+test("reloads matching source records and recalculates the Fit Assessment", () => {
+  const fake = createFakeStorage();
+  const persistence = createCareerPersistence(fake);
+  const state = persistence.state;
+
+  state.createJob(createJobRecord({
+    company: "Example Company",
+    roleTitle: "Engineer"
+  }, {
+    id: "job-1",
+    createdAt: timestamp
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-1",
+    description: "Mandatory requirement",
+    category: "experience",
+    importance: "mandatory"
+  }, {
+    id: "requirement-mandatory",
+    createdAt: timestamp
+  }));
+  state.createRequirement(createRequirementRecord({
+    jobId: "job-1",
+    description: "Preferred requirement",
+    category: "skill",
+    importance: "preferred"
+  }, {
+    id: "requirement-preferred",
+    createdAt: timestamp
+  }));
+  state.addAchievementRecord({
+    title: "Verified achievement",
+    contribution: "Delivered a measurable result"
+  }, {
+    id: "achievement-verified",
+    createdAt: timestamp
+  });
+  state.addAchievementRecord({
+    title: "Unverified achievement",
+    contribution: "Completed relevant work"
+  }, {
+    id: "achievement-unverified",
+    createdAt: timestamp
+  });
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-mandatory",
+    achievementId: "achievement-verified"
+  }, {
+    id: "mapping-mandatory",
+    createdAt: timestamp
+  }));
+  state.createAchievementMapping(createAchievementMappingRecord({
+    requirementId: "requirement-preferred",
+    achievementId: "achievement-unverified"
+  }, {
+    id: "mapping-preferred",
+    createdAt: timestamp
+  }));
+  state.updateAchievementVerificationStatus(
+    "achievement-verified",
+    "verified",
+    timestamp
+  );
+
+  assert.ok(fake.calls.setItem.length > 0);
+  const saved = JSON.parse(fake.values.get(storageKey));
+  assert.equal(saved.version, 3);
+  assert.equal("fitAssessments" in saved, false);
+
+  const writesBeforeReload = fake.calls.setItem.length;
+  const reloadedPersistence = createCareerPersistence(fake);
+  const restoredState = reloadedPersistence.state;
+
+  assert.equal(fake.calls.getItem.length, 2);
+  assert.equal(fake.calls.setItem.length, writesBeforeReload);
+  assert.deepEqual(restoredState.getJobs().map(({ id }) => id), ["job-1"]);
+  assert.deepEqual(
+    restoredState.getRequirements("job-1").map(({ id, jobId, importance }) => ({
+      id,
+      jobId,
+      importance
+    })),
+    [
+      { id: "requirement-mandatory", jobId: "job-1", importance: "mandatory" },
+      { id: "requirement-preferred", jobId: "job-1", importance: "preferred" }
+    ]
+  );
+  assert.deepEqual(
+    restoredState.getAchievementRecords().map(({ id, verificationStatus }) => ({
+      id,
+      verificationStatus
+    })),
+    [
+      { id: "achievement-verified", verificationStatus: "verified" },
+      { id: "achievement-unverified", verificationStatus: "unverified" }
+    ]
+  );
+  assert.deepEqual(
+    restoredState.getAchievementMappingsForRequirement("requirement-mandatory")
+      .map(({ id, achievementId }) => ({ id, achievementId })),
+    [{ id: "mapping-mandatory", achievementId: "achievement-verified" }]
+  );
+  assert.deepEqual(
+    restoredState.getAchievementMappingsForRequirement("requirement-preferred")
+      .map(({ id, achievementId }) => ({ id, achievementId })),
+    [{ id: "mapping-preferred", achievementId: "achievement-unverified" }]
+  );
+  assert.equal("fitAssessments" in restoredState.getSnapshot(), false);
+
+  const partialAssessment = restoredState.calculateJobFitAssessment("job-1");
+  const mandatoryResult = partialAssessment.requirementResults.find(
+    ({ requirementId }) => requirementId === "requirement-mandatory"
+  );
+  const preferredResult = partialAssessment.requirementResults.find(
+    ({ requirementId }) => requirementId === "requirement-preferred"
+  );
+
+  assert.equal(partialAssessment.status, "assessed");
+  assert.equal(partialAssessment.score, (2 / 3) * 100);
+  assert.equal(partialAssessment.supportedRequirementCount, 1);
+  assert.equal(partialAssessment.totalRequirementCount, 2);
+  assert.equal(partialAssessment.supportedMandatoryCount, 1);
+  assert.equal(partialAssessment.totalMandatoryCount, 1);
+  assert.deepEqual(mandatoryResult.verifiedAchievementIds, ["achievement-verified"]);
+  assert.deepEqual(mandatoryResult.unverifiedAchievementIds, []);
+  assert.deepEqual(preferredResult.verifiedAchievementIds, []);
+  assert.deepEqual(preferredResult.unverifiedAchievementIds, ["achievement-unverified"]);
+
+  restoredState.updateAchievementVerificationStatus(
+    "achievement-unverified",
+    "verified",
+    "2025-04-21T14:30:00.000Z"
+  );
+
+  const completeAssessment = restoredState.calculateJobFitAssessment("job-1");
+
+  assert.equal(completeAssessment.score, 100);
+  assert.equal(completeAssessment.supportedRequirementCount, 2);
+  assert.equal(completeAssessment.totalRequirementCount, 2);
+  assert.equal(completeAssessment.supportedMandatoryCount, 1);
+  assert.equal(completeAssessment.totalMandatoryCount, 1);
+  assert.deepEqual(
+    completeAssessment.requirementResults
+      .flatMap(({ verifiedAchievementIds }) => verifiedAchievementIds)
+      .sort(),
+    ["achievement-unverified", "achievement-verified"]
+  );
+  assert.deepEqual(
+    completeAssessment.requirementResults
+      .flatMap(({ unverifiedAchievementIds }) => unverifiedAchievementIds),
+    []
+  );
 });
 
 test("failed writes preserve in-memory mutations and a later save clears the warning", () => {
