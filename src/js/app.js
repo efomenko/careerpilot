@@ -7,6 +7,7 @@ import { createJobRecord } from "./job-model.js";
 import { createRequirementRecord } from "./requirement-model.js";
 import { createAchievementMappingRecord } from "./achievement-mapping-model.js";
 import { getJobListResults } from "./job-ui-helpers.js";
+import { getDashboardSummary } from "./dashboard-summary-helpers.js";
 import {
   getAchievementMappingSelectorState,
   getMappedAchievementEvidence
@@ -71,6 +72,41 @@ const currentSection = document.querySelector("#current-section");
 const pageTitle = document.querySelector("#page-title");
 const navigationLinks = document.querySelectorAll("[data-view]");
 const pageViews = document.querySelectorAll("[data-page-view]");
+const dashboardSummaryError = document.querySelector("#dashboard-summary-error");
+const dashboardJobCount = document.querySelector("#dashboard-job-count");
+const dashboardJobStatusCounts = document.querySelector("#dashboard-job-status-counts");
+const dashboardRecentJobs = document.querySelector("#dashboard-recent-jobs");
+const dashboardRecentJobsEmpty = document.querySelector("#dashboard-recent-jobs-empty");
+const dashboardRequirementCount = document.querySelector("#dashboard-requirement-count");
+const dashboardMappedRequirements = document.querySelector(
+  "#dashboard-mapped-requirements"
+);
+const dashboardMappedCoverage = document.querySelector("#dashboard-mapped-coverage");
+const dashboardVerifiedRequirements = document.querySelector(
+  "#dashboard-verified-requirements"
+);
+const dashboardVerifiedCoverage = document.querySelector(
+  "#dashboard-verified-coverage"
+);
+const dashboardAssessedJobCount = document.querySelector("#dashboard-assessed-job-count");
+const dashboardAverageScore = document.querySelector("#dashboard-average-score");
+const dashboardStrongestJobs = document.querySelector("#dashboard-strongest-jobs");
+const dashboardStrongestJobsEmpty = document.querySelector(
+  "#dashboard-strongest-jobs-empty"
+);
+const dashboardJobsNeedingEvidence = document.querySelector(
+  "#dashboard-jobs-needing-evidence"
+);
+const dashboardNextStepHeading = document.querySelector("#dashboard-next-step-heading");
+const dashboardNextStepDescription = document.querySelector(
+  "#dashboard-next-step-description"
+);
+const dashboardNextStepLink = document.querySelector(
+  ".next-step-card .primary-link"
+);
+const dashboardNextStepLinkLabel = document.querySelector(
+  "#dashboard-next-step-link-label"
+);
 const profileForm = document.querySelector("#profile-form");
 const profileDialog = document.querySelector("#profile-dialog");
 const profileAction = document.querySelector("#profile-action");
@@ -431,6 +467,106 @@ function renderProfile(profile = careerState.getProfile()) {
     item.textContent = skill;
     profileSkillsList.append(item);
   });
+}
+
+function renderDashboardUnavailable(error) {
+  dashboardSummaryError.textContent =
+    error.message || "The Dashboard summary could not be calculated.";
+  dashboardSummaryError.hidden = false;
+  dashboardJobCount.textContent = "Unavailable";
+  dashboardJobStatusCounts.textContent = "Job counts unavailable.";
+  dashboardRecentJobs.replaceChildren();
+  dashboardRecentJobsEmpty.textContent = "Recent Jobs unavailable.";
+  dashboardRecentJobsEmpty.hidden = false;
+  dashboardRequirementCount.textContent = "Unavailable";
+  dashboardMappedRequirements.textContent = "Unavailable";
+  dashboardMappedCoverage.textContent = "Unavailable";
+  dashboardVerifiedRequirements.textContent = "Unavailable";
+  dashboardVerifiedCoverage.textContent = "Unavailable";
+  dashboardAssessedJobCount.textContent = "Unavailable";
+  dashboardAverageScore.textContent = "Unavailable";
+  dashboardStrongestJobs.replaceChildren();
+  dashboardStrongestJobsEmpty.textContent = "Strongest Job data unavailable.";
+  dashboardStrongestJobsEmpty.hidden = false;
+  dashboardJobsNeedingEvidence.textContent = "Unavailable";
+}
+
+function renderDashboard() {
+  try {
+    const hasProfile = Boolean(careerState.getProfile());
+    dashboardNextStepHeading.textContent = hasProfile
+      ? "Build your career evidence"
+      : "Start with your career story";
+    dashboardNextStepDescription.textContent = hasProfile
+      ? "Record your achievements and supporting evidence to connect your experience with Job Requirements."
+      : "Before tailoring applications, build a reliable record of your experience, achievements, and supporting evidence.";
+    dashboardNextStepLinkLabel.textContent = hasProfile
+      ? "Add achievements"
+      : "Set up profile";
+    dashboardNextStepLink.href = hasProfile ? "#achievements" : "#profile";
+    dashboardNextStepLink.dataset.view = hasProfile ? "achievements" : "profile";
+
+    const jobs = careerState.getJobs();
+    const requirements = jobs.flatMap((job) => careerState.getRequirements(job.id));
+    const mappings = requirements.flatMap((requirement) =>
+      careerState.getAchievementMappingsForRequirement(requirement.id)
+    );
+    const assessments = jobs.map((job) =>
+      careerState.calculateJobFitAssessment(job.id)
+    );
+    const summary = getDashboardSummary(jobs, requirements, mappings, assessments);
+    const jobsById = new Map(jobs.map((job) => [job.id, job]));
+
+    dashboardSummaryError.textContent = "";
+    dashboardSummaryError.hidden = true;
+    dashboardJobCount.textContent =
+      `${summary.jobCounts.total} ${summary.jobCounts.total === 1 ? "Job" : "Jobs"}`;
+    dashboardJobStatusCounts.textContent =
+      `${summary.jobCounts.active} Active · ${summary.jobCounts.archived} Archived`;
+
+    dashboardRecentJobs.replaceChildren();
+    dashboardRecentJobsEmpty.hidden = summary.recentJobs.length > 0;
+    summary.recentJobs.forEach((job) => {
+      const item = document.createElement("li");
+      item.textContent =
+        `${job.roleTitle} at ${job.company} — ${formatJobTimestamp(job.updatedAt)}`;
+      dashboardRecentJobs.append(item);
+    });
+
+    const coverage = summary.requirementCoverage;
+    dashboardRequirementCount.textContent =
+      `${coverage.totalRequirements} ${coverage.totalRequirements === 1 ? "Requirement" : "Requirements"}`;
+    dashboardMappedRequirements.textContent =
+      `${coverage.mappedRequirements} of ${coverage.totalRequirements}`;
+    dashboardMappedCoverage.textContent = coverage.mappedCoveragePercent === null
+      ? "N/A"
+      : `${coverage.mappedCoveragePercent.toFixed(1)}%`;
+    dashboardVerifiedRequirements.textContent =
+      `${coverage.verifiedSupportedRequirements} of ${coverage.totalRequirements}`;
+    dashboardVerifiedCoverage.textContent = coverage.verifiedCoveragePercent === null
+      ? "N/A"
+      : `${coverage.verifiedCoveragePercent.toFixed(1)}%`;
+
+    const fitAssessments = summary.fitAssessments;
+    dashboardAssessedJobCount.textContent = String(fitAssessments.assessedJobCount);
+    dashboardAverageScore.textContent = fitAssessments.averageScore === null
+      ? "N/A"
+      : `${fitAssessments.averageScore.toFixed(1)}%`;
+    dashboardJobsNeedingEvidence.textContent =
+      String(fitAssessments.jobsNeedingEvidenceCount);
+    dashboardStrongestJobs.replaceChildren();
+    dashboardStrongestJobsEmpty.hidden = fitAssessments.strongestJobs.length > 0;
+    fitAssessments.strongestJobs.forEach(({ jobId, score }) => {
+      const item = document.createElement("li");
+      const job = jobsById.get(jobId);
+      item.textContent = job
+        ? `${job.roleTitle} at ${job.company} — ${score.toFixed(1)}%`
+        : `Job record unavailable — ${score.toFixed(1)}%`;
+      dashboardStrongestJobs.append(item);
+    });
+  } catch (error) {
+    renderDashboardUnavailable(error);
+  }
 }
 
 function populateProfileForm(profile) {
@@ -3006,6 +3142,10 @@ function navigateTo(viewName, { focusDestination = false } = {}) {
   pageViews.forEach((page) => {
     page.hidden = page.dataset.pageView !== viewName;
   });
+
+  if (viewName === "dashboard") {
+    renderDashboard();
+  }
 
   if (viewName === "jobs") {
     renderJobRecords();

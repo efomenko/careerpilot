@@ -153,32 +153,45 @@
           <section class="section-heading">
             <div>
               <h2>Your workspace at a glance</h2>
-              <p>These sections will come to life as we build the MVP.</p>
+              <p>Track your Jobs, evidence, and Fit Assessments.</p>
             </div>
+            <p id="dashboard-summary-error" role="status" aria-live="polite" hidden></p>
           </section>
 
           <section class="summary-grid" aria-label="Workspace overview">
             <article class="summary-card">
               <div class="card-top">
                 <span class="card-icon purple" aria-hidden="true">◎</span>
-                <span class="card-label">CAREER PROFILE</span>
+                <span class="card-label">RECENT JOBS</span>
               </div>
-              <p class="card-value">Not started</p>
-              <p class="card-description">Capture your experience and skills.</p>
-              <a href="#profile" data-view="profile" class="card-link">
-                Build your profile <span aria-hidden="true">→</span>
+              <p class="card-value">Most recently updated</p>
+              <ul id="dashboard-recent-jobs" aria-label="Three most recently updated Jobs"></ul>
+              <p id="dashboard-recent-jobs-empty" class="card-description" hidden>
+                No Jobs have been added yet.
+              </p>
+              <a href="#jobs" data-view="jobs" class="card-link">
+                View Jobs <span aria-hidden="true">→</span>
               </a>
             </article>
 
             <article class="summary-card">
               <div class="card-top">
                 <span class="card-icon blue" aria-hidden="true">✦</span>
-                <span class="card-label">ACHIEVEMENTS</span>
+                <span class="card-label">REQUIREMENTS &amp; EVIDENCE</span>
               </div>
-              <p class="card-value">0 recorded</p>
-              <p class="card-description">Keep track of evidence-backed results.</p>
-              <a href="#achievements" data-view="achievements" class="card-link">
-                Add achievements <span aria-hidden="true">→</span>
+              <p class="card-value" id="dashboard-requirement-count">0 Requirements</p>
+              <p class="card-description">
+                Mapped evidence:
+                <span id="dashboard-mapped-requirements">0 of 0</span>
+                (<span id="dashboard-mapped-coverage">N/A</span>)
+              </p>
+              <p class="card-description">
+                Verified-supported:
+                <span id="dashboard-verified-requirements">0 of 0</span>
+                (<span id="dashboard-verified-coverage">N/A</span>)
+              </p>
+              <a href="#jobs" data-view="jobs" class="card-link">
+                Review Requirements <span aria-hidden="true">→</span>
               </a>
             </article>
 
@@ -187,8 +200,10 @@
                 <span class="card-icon orange" aria-hidden="true">▤</span>
                 <span class="card-label">JOB OPPORTUNITIES</span>
               </div>
-              <p class="card-value">0 saved</p>
-              <p class="card-description">Organize roles you want to explore.</p>
+              <p class="card-value" id="dashboard-job-count">0 Jobs</p>
+              <p class="card-description" id="dashboard-job-status-counts">
+                0 Active · 0 Archived
+              </p>
               <a href="#jobs" data-view="jobs" class="card-link">
                 Explore jobs <span aria-hidden="true">→</span>
               </a>
@@ -197,12 +212,26 @@
             <article class="summary-card">
               <div class="card-top">
                 <span class="card-icon green" aria-hidden="true">✓</span>
-                <span class="card-label">APPLICATIONS</span>
+                <span class="card-label">FIT OVERVIEW</span>
               </div>
-              <p class="card-value">0 tracked</p>
-              <p class="card-description">Keep your application process organized.</p>
-              <a href="#applications" data-view="applications" class="card-link">
-                View tracker <span aria-hidden="true">→</span>
+              <p class="card-value">
+                <span id="dashboard-assessed-job-count">0</span> assessed Jobs
+              </p>
+              <p class="card-description">
+                Average Fit Assessment:
+                <span id="dashboard-average-score">N/A</span>
+              </p>
+              <p class="card-description">Highest-scoring Jobs:</p>
+              <ul id="dashboard-strongest-jobs" aria-label="Highest-scoring assessed Jobs"></ul>
+              <p id="dashboard-strongest-jobs-empty" class="card-description" hidden>
+                No assessed Jobs yet.
+              </p>
+              <p class="card-description">
+                Jobs needing additional evidence:
+                <span id="dashboard-jobs-needing-evidence">0</span>
+              </p>
+              <a href="#jobs" data-view="jobs" class="card-link">
+                Review Fit Assessments <span aria-hidden="true">→</span>
               </a>
             </article>
           </section>
@@ -211,14 +240,15 @@
             <div class="next-step-icon" aria-hidden="true">✧</div>
             <div>
               <p class="eyebrow">YOUR NEXT STEP</p>
-              <h2>Start with your career story</h2>
-              <p>
+              <h2 id="dashboard-next-step-heading">Start with your career story</h2>
+              <p id="dashboard-next-step-description">
                 Before tailoring applications, build a reliable record of your
                 experience, achievements, and supporting evidence.
               </p>
             </div>
             <a href="#profile" data-view="profile" class="primary-link">
-              Set up profile <span aria-hidden="true">→</span>
+              <span id="dashboard-next-step-link-label">Set up profile</span>
+              <span aria-hidden="true">→</span>
             </a>
           </section>
         </section>
