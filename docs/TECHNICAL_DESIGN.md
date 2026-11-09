@@ -866,7 +866,7 @@ Certification records have this target shape:
 and accept a structured date or `null`; `credentialId` and `credentialUrl`
 default to empty strings. A supplied URL must be an absolute HTTP or HTTPS
 URL; preserve its entered value rather than silently rewriting it. A definite
-expiration before issue is invalid; ambiguous chronology warns. Missing
+expiration before issue is invalid; ambiguous chronology may warn. Missing
 expiration does not imply indefinite validity. `provenance` defaults to an
 empty array.
 
@@ -979,13 +979,14 @@ supported by the source and never invent it. Dates use the Gregorian
 calendar, years 0001-9999. Current Employment requires `isCurrent: true` and
 `endDate: null`; past Employment may have an unknown null end date.
 
-Compare the possible calendar intervals represented by each date's
+Validate date format, Gregorian calendar validity, and the supported year
+range. Compare the possible calendar intervals represented by each date's
 precision. Reject chronology only when those intervals establish a definite
-reversal. Warn when the intervals overlap or otherwise prevent a definite
-chronological conclusion; different precision alone is not a warning.
-Unusual or future dates warn. For Certification, definite
-expiration-before-issue is invalid and ambiguous chronology warns. Never
-invent missing date precision.
+reversal. Ambiguous chronology may warn; different precision alone is not a
+warning. Future and unusual dates remain valid without warnings unless they
+violate these validation rules; future and unusual-date warnings are deferred
+until their policy is approved. For Certification, definite
+expiration-before-issue is invalid. Never invent missing date precision.
 
 ### 16.6 Snapshot v4 and historical migration
 

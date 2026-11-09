@@ -652,10 +652,12 @@ and must not be marked passed until executed.
 - Validate Education and Certification required fields, defaults, structured
   dates, timestamps, URL protocol/absolute-URL rules, and chronology errors
   versus warnings.
-- Validate structured dates at year, month, and day precision; reject
+- Validate structured date formats at year, month, and day precision; reject
   impossible Gregorian dates and years outside 0001-9999; preserve `null`
-  unknown dates. Test definitely reversed, overlapping/ambiguous,
-  future, and unusual date cases.
+  unknown dates. Test definite chronology errors and overlapping/ambiguous
+  chronology warnings. Future and unusual dates remain valid without warnings
+  unless they violate these validation rules; tests for future and
+  unusual-date warnings are deferred until their policy is approved.
 - Validate Profile, Employment, Education, Certification, and Achievement
   field-level provenance, 500-character excerpt limit, optional page,
   association statuses, stable field paths/item IDs, defensive copying,

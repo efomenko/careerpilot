@@ -94,7 +94,7 @@ function isCalendarDate(value) {
   return day >= 1 && day <= daysInMonth[month - 1];
 }
 
-function dateInterval(value) {
+export function dateInterval(value) {
   if (typeof value === "string") {
     const match = /^(\d{4})-\d{2}-\d{2}$/.exec(value);
     return match && Number(match[1]) > 0 && isCalendarDate(value)
@@ -229,7 +229,7 @@ export function isJsonCompatibleProvenance(value, active = new WeakSet()) {
   }
 }
 
-function isUtcTimestamp(value) {
+export function isUtcTimestamp(value) {
   if (typeof value !== "string") {
     return false;
   }
