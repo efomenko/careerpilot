@@ -7,6 +7,8 @@ import {
   createPersistenceNotifications
 } from "../src/js/career-persistence.js";
 import { createCareerStorage } from "../src/js/career-storage.js";
+import { createCareerState } from "../src/js/career-state.js";
+import { createSnapshotWriter } from "../src/js/snapshot-writer.js";
 import { createJobRecord } from "../src/js/job-model.js";
 import { createRequirementRecord } from "../src/js/requirement-model.js";
 
@@ -179,6 +181,191 @@ function createWithDependencies(storage, dependencies = {}, options = {}) {
   return createCareerPersistence(storage, options, dependencies);
 }
 
+test("coordinated persistence saves detached career and session mutations", async () => {
+  const fake = createFakeStorage();
+  let locked = false;
+  const locks = { request: async (name, options, callback) => {
+    locked = true;
+    try { return await callback(); } finally { locked = false; }
+  } };
+  const setItem = fake.setItem.bind(fake);
+  fake.setItem = (key, value) => {
+    assert.equal(locked, true);
+    setItem(key, value);
+  };
+  const persistence = createCareerPersistence(fake, { locks, secureContext: true });
+  await persistence.state.createProfile({ fullName: "Name", headline: "", summary: "", skills: [] }, { id: "p", createdAt: timestamp });
+  assert.deepEqual(persistence.getRevisions(), { snapshotRevision: 1, careerRevision: 1 });
+  const session = {
+    id: "s", status: "processing",
+    sourceDocument: { id: "d", fileName: "cv.pdf", mimeType: "application/pdf", language: "en",
+      uploadedAt: timestamp, deleteBy: "2025-04-21T14:30:00.000Z", status: "uploaded" },
+    createdAt: timestamp, expiresAt: "2025-04-27T14:30:00.000Z", lastActivityAt: timestamp,
+    currentCategory: null, candidates: [], reviewDecisions: [], processingAttempts: []
+  };
+  await persistence.state.createImportSession(session);
+  assert.deepEqual(persistence.getRevisions(), { snapshotRevision: 2, careerRevision: 1 });
+  const reloaded = createCareerPersistence(fake, { locks, secureContext: true });
+  assert.equal(reloaded.state.getProfile().fullName, "Name");
+  assert.equal(reloaded.state.getImportSession("s").id, "s");
+  assert.deepEqual(reloaded.getRevisions(), { snapshotRevision: 2, careerRevision: 1 });
+});
+
+test("coordinated persistence rejects unavailable, stale, and failed saves without publication", async () => {
+  const fake = createFakeStorage();
+  const locks = { request: (name, options, callback) => callback() };
+  const unavailable = createCareerPersistence(fake, { locks: null, secureContext: true });
+  await assert.rejects(unavailable.state.createProfile({ fullName: "No" }, { id: "n", createdAt: timestamp }),
+    (error) => error.status === "coordination-unavailable");
+  assert.equal(unavailable.state.getProfile(), null);
+  assert.equal(fake.values.has(storageKey), false);
+  const first = createCareerPersistence(fake, { locks, secureContext: true });
+  const stale = createCareerPersistence(fake, { locks, secureContext: true });
+  await first.state.createProfile({ fullName: "First", headline: "", summary: "", skills: [] }, { id: "p", createdAt: timestamp });
+  const bytes = fake.values.get(storageKey);
+  await assert.rejects(stale.state.createProfile({ fullName: "Stale" }, { id: "s", createdAt: timestamp }),
+    (error) => error.status === "stale");
+  assert.equal(stale.state.getProfile(), null);
+  assert.equal(fake.values.get(storageKey), bytes);
+  fake.setError = new Error("storage failure");
+  await assert.rejects(first.state.updateProfile({ fullName: "Changed", headline: "", summary: "", skills: [] }, timestamp),
+    (error) => error.status === "save-failed");
+  assert.equal(first.state.getProfile().fullName, "First");
+  assert.equal(fake.values.get(storageKey), bytes);
+});
+
+test("coordinated persistence routes every mutation entry point through the lock", async () => {
+  const methods = [
+    "createProfile", "updateProfile", "addEmploymentRecord", "updateEmploymentRecord",
+    "deleteEmploymentRecord", "addAchievementRecord", "updateAchievementRecord",
+    "updateAchievementVerificationStatus", "deleteAchievementRecord", "createJob",
+    "updateJob", "archiveJob", "reactivateJob", "deleteJob", "createRequirement",
+    "updateRequirement", "deleteRequirement", "createAchievementMapping", "deleteAchievementMapping",
+    "restoreSnapshot", "createImportSession", "transitionImportSession", "retryImportSession",
+    "addImportCandidates", "setImportCategory", "updateImportCandidate", "decideImportCandidate"
+  ];
+  for (const method of methods) {
+    let acquisitions = 0;
+    const locks = { request: async (name, options, callback) => {
+      acquisitions += 1;
+      return callback();
+    } };
+    const persistence = createCareerPersistence(createFakeStorage(), { locks, secureContext: true });
+    try {
+      await persistence.state[method]();
+    } catch (error) {
+      assert.ok(error instanceof Error, method);
+    }
+    assert.equal(acquisitions, 1, method);
+  }
+});
+
+test("coordinated persistence handles lock acquisition failure without writes", async () => {
+  const fake = createFakeStorage();
+  const locks = { request: () => Promise.reject(new Error("unavailable")) };
+  const persistence = createCareerPersistence(fake, { locks, secureContext: true });
+  await assert.rejects(persistence.state.createProfile({}, {}), (error) => error.status === "coordination-failed");
+  assert.equal(persistence.state.getProfile(), null);
+  assert.equal(fake.calls.setItem.length, 0);
+});
+
+test("coordinated persistence discards partially restored state after a restore failure", async () => {
+  const fake = createFakeStorage(stored(snapshot(), 3));
+  const raw = fake.values.get(storageKey);
+  let created = 0;
+  const errors = [];
+  const persistence = createWithDependencies(fake, {
+    createState() {
+      created += 1;
+      if (created === 1) {
+        return {
+          restoreSnapshot() { throw new Error("restore failed"); }
+        };
+      }
+      return createCareerState();
+    }
+  }, {
+    onUnexpectedError(error) { errors.push(error.message); },
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true
+  });
+  assert.deepEqual(errors, ["restore failed"]);
+  assert.equal(persistence.state.getProfile(), null);
+  await assert.rejects(persistence.state.createProfile({}, {}), (error) => error.status === "writes-disabled");
+  assert.equal(fake.values.get(storageKey), raw);
+});
+
+test("coordinated persistence reports storage construction errors and disables writes", async () => {
+  const fake = createFakeStorage(stored(snapshot(), 3));
+  const raw = fake.values.get(storageKey);
+  const errors = [];
+  const persistence = createWithDependencies(fake, {
+    createStorage() { throw new Error("storage failure"); }
+  }, { onUnexpectedError(error) { errors.push(error.message); } });
+  assert.deepEqual(errors, ["storage failure"]);
+  assert.equal(persistence.getStatus().persistentWarning.kind, "unavailable");
+  await assert.rejects(persistence.state.createProfile({}, {}), (error) => error.status === "writes-disabled");
+  assert.equal(fake.values.get(storageKey), raw);
+});
+
+test("coordinated persistence keeps staging private until a delayed save succeeds", async () => {
+  const fake = createFakeStorage();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let factoryCalls = 0;
+  const persistence = createWithDependencies(fake, {
+    createState(options = {}) {
+      assert.equal(options.onMutation, undefined);
+      factoryCalls += 1;
+      return createCareerState(options);
+    },
+    createStorage(storage) {
+      const actual = createCareerStorage(storage);
+      return {
+        load: actual.load,
+        createWriter(options) {
+          return actual.createWriter({
+            ...options,
+            locks: {
+              request: (name, lockOptions, callback) => gate.then(callback)
+            }
+          });
+        }
+      };
+    }
+  }, { secureContext: true });
+  const pending = persistence.state.createProfile(
+    { fullName: "Pending", headline: "", summary: "", skills: [] },
+    { id: "p", createdAt: timestamp }
+  );
+  assert.equal(persistence.state.getProfile(), null);
+  assert.equal(fake.values.has(storageKey), false);
+  release();
+  await pending;
+  assert.equal(persistence.state.getProfile().fullName, "Pending");
+  assert.ok(factoryCalls >= 2);
+});
+
+test("coordinated persistence preserves corrupt, future and lossy snapshots", async () => {
+  const protectedRaw = JSON.stringify({ version: 3, ...snapshot(), legacyRequirements: [{ score: "TOKEN" }] })
+    .replace('"TOKEN"', "0.1234567890123456789");
+  for (const [raw, kind] of [
+    ["not JSON", "corrupt"],
+    [stored(snapshot(), 99), "unsupported-version"],
+    [protectedRaw, "read-only"]
+  ]) {
+    const fake = createFakeStorage(raw);
+    const persistence = createCareerPersistence(fake, {
+      locks: { request: (name, options, callback) => callback() }, secureContext: true
+    });
+    assert.equal(persistence.getStatus().persistentWarning.kind, kind);
+    assert.equal(persistence.state.getProfile(), null);
+    await assert.rejects(persistence.state.createProfile({}, {}), (error) => error.status === "writes-disabled");
+    assert.equal(fake.values.get(storageKey), raw);
+    assert.equal(fake.calls.setItem.length, 0);
+  }
+});
+
 test("missing storage returns an empty state without warnings", () => {
   const fake = createFakeStorage();
   const persistence = createCareerPersistence(fake);
@@ -204,7 +391,7 @@ test("valid data is restored before the function returns", () => {
   });
 });
 
-test("corrupt and unsupported data produce persistent warnings and are not overwritten", () => {
+test("corrupt and unsupported data produce persistent warnings and are not overwritten", async () => {
   for (const [raw, kind] of [
     ["not valid JSON", "corrupt"],
     [stored(snapshot(), 4), "corrupt"],
@@ -215,18 +402,19 @@ test("corrupt and unsupported data produce persistent warnings and are not overw
 
     assert.equal(persistence.getStatus().persistentWarning.kind, kind);
     assert.equal(fake.values.get(storageKey), raw);
-    persistence.state.createProfile({
+    await assert.rejects(persistence.state.createProfile({
       fullName: "New profile",
       headline: "",
       summary: "",
       skills: []
-    }, { id: "new-profile", createdAt: timestamp });
+    }, { id: "new-profile", createdAt: timestamp }), (error) => error.status === "writes-disabled");
+    assert.equal(persistence.state.getProfile(), null);
     assert.equal(fake.values.get(storageKey), raw);
     assert.equal(persistence.getStatus().transientWarning.kind, "write-disabled");
   }
 });
 
-test("initial read failure protects existing bytes for the session after storage recovers", () => {
+test("initial read failure protects existing bytes for the session after storage recovers", async () => {
   const raw = stored(migratedV4(snapshot()), 4);
   const fake = createFakeStorage(raw);
   fake.getError = new Error("read failure");
@@ -241,26 +429,28 @@ test("initial read failure protects existing bytes for the session after storage
   assert.equal(persistence.getStatus().persistentWarning.kind, "unavailable");
   assert.match(persistence.getStatus().persistentWarning.message, /could not be read.*disabled.*session/);
   fake.getError = null;
-  state.createProfile({
+  const create = state.createProfile({
     fullName: "New profile",
     headline: "",
     summary: "",
     skills: []
   }, { id: "new-profile", createdAt: timestamp });
-  notifications.show("success", "Profile created.");
+  await assert.rejects(create, (error) => error.status === "writes-disabled");
+  await notifications.show("success", "Profile created.", create);
 
-  assert.equal(state.getProfile().fullName, "New profile");
-  assert.equal(persistence.getMutationSaveOutcome(), "unavailable");
+  assert.equal(state.getProfile(), null);
+  assert.equal(await persistence.getOperationOutcome(create), "writes-disabled");
   assert.equal(persistence.getStatus().persistentWarning.kind, "unavailable");
   assert.equal(messages[0].type, "error");
   assert.match(messages[0].message, /Saving could not be completed/);
   assert.equal(fake.values.get(storageKey), raw);
   assert.deepEqual(fake.calls.setItem, []);
 
-  state.updateProfile({ fullName: "Updated in memory", headline: "", summary: "", skills: [] }, timestamp);
-  notifications.show("success", "Profile updated.");
-  assert.equal(state.getProfile().fullName, "Updated in memory");
-  assert.equal(persistence.getMutationSaveOutcome(), "unavailable");
+  const update = state.updateProfile({ fullName: "Updated in memory", headline: "", summary: "", skills: [] }, timestamp);
+  await assert.rejects(update, (error) => error.status === "writes-disabled");
+  await notifications.show("success", "Profile updated.", update);
+  assert.equal(state.getProfile(), null);
+  assert.equal(await persistence.getOperationOutcome(update), "writes-disabled");
   assert.equal(messages[1].type, "error");
   assert.equal(fake.values.get(storageKey), raw);
   assert.deepEqual(fake.calls.setItem, []);
@@ -272,52 +462,62 @@ test("initial read failure protects existing bytes for the session after storage
   assert.deepEqual(fake.calls.setItem, []);
 });
 
-test("an initially unreadable empty store also stays protected until reinitialization", () => {
+test("an initially unreadable empty store also stays protected until reinitialization", async () => {
   const fake = createFakeStorage();
   fake.getError = new Error("read failure");
   const persistence = createCareerPersistence(fake);
   fake.getError = null;
 
-  persistence.state.createProfile({
+  const blocked = persistence.state.createProfile({
     fullName: "Session profile", headline: "", summary: "", skills: []
   }, { id: "session-profile", createdAt: timestamp });
-  assert.equal(persistence.getMutationSaveOutcome(), "unavailable");
+  await assert.rejects(blocked, (error) => error.status === "writes-disabled");
+  assert.equal(await persistence.getOperationOutcome(blocked), "writes-disabled");
+  assert.equal(persistence.state.getProfile(), null);
   assert.equal(fake.values.has(storageKey), false);
   assert.deepEqual(fake.calls.setItem, []);
 
-  const reloaded = createCareerPersistence(fake);
-  reloaded.state.createProfile({
+  const reloaded = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
+  const retry = reloaded.state.createProfile({
     fullName: "New profile", headline: "", summary: "", skills: []
   }, { id: "new-profile", createdAt: timestamp });
-  assert.equal(reloaded.getMutationSaveOutcome(), "saved");
+  await retry;
+  assert.equal(await reloaded.getOperationOutcome(retry), "saved");
   assert.equal(JSON.parse(fake.values.get(storageKey)).profile.id, "new-profile");
 });
 
-test("a read failure after successful initialization can be retried safely", () => {
+test("a read failure after successful initialization can be retried safely", async () => {
   const raw = stored(migratedV4(snapshot()), 4);
   const fake = createFakeStorage(raw);
-  const persistence = createCareerPersistence(fake);
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
   fake.getError = new Error("temporary read failure");
-  persistence.state.updateProfile({
+  const failed = persistence.state.updateProfile({
     fullName: "Updated", headline: "", summary: "", skills: []
   }, timestamp);
+  await assert.rejects(failed, (error) => error.status === "read-failed" && error.cause === "unavailable");
 
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
-  assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
+  assert.equal(await persistence.getOperationOutcome(failed), "read-failed");
+  assert.equal(persistence.getStatus().transientWarning.kind, "read-failed");
+  assert.equal(persistence.state.getProfile().fullName, "Career profile name");
   assert.equal(fake.values.get(storageKey), raw);
   assert.deepEqual(fake.calls.setItem, []);
 
   fake.getError = null;
-  persistence.state.updateProfile({
+  const retried = persistence.state.updateProfile({
     fullName: "Retried", headline: "", summary: "", skills: []
   }, timestamp);
-  assert.equal(persistence.getMutationSaveOutcome(), "saved");
+  await retried;
+  assert.equal(await persistence.getOperationOutcome(retried), "saved");
   assert.equal(persistence.getStatus().transientWarning, null);
   assert.equal(JSON.parse(fake.values.get(storageKey)).profile.fullName, "Retried");
   assert.equal(fake.calls.setItem.length, 1);
 });
 
-test("adapter construction failure leaves a usable in-memory state", () => {
+test("adapter construction failure preserves empty in-memory state and disables writes", async () => {
   const errors = [];
   const persistence = createWithDependencies(null, {
     createStorage() {
@@ -327,101 +527,58 @@ test("adapter construction failure leaves a usable in-memory state", () => {
     onUnexpectedError: (error) => errors.push(error)
   });
 
-  persistence.state.createProfile({
+  await assert.rejects(persistence.state.createProfile({
     fullName: "In-memory profile",
     headline: "",
     summary: "",
     skills: []
-  }, { id: "profile-memory", createdAt: timestamp });
+  }, { id: "profile-memory", createdAt: timestamp }), (error) => error.status === "writes-disabled");
 
-  assert.equal(persistence.state.getProfile().id, "profile-memory");
+  assert.equal(persistence.state.getProfile(), null);
   assert.equal(persistence.getStatus().persistentWarning.kind, "unavailable");
   assert.equal(errors.length, 1);
 });
 
-test("unexpected restore failure discards the partially restored state", () => {
-  const rawSnapshot = snapshot();
-  const originalStoredData = JSON.stringify(rawSnapshot);
+test("unexpected restore failure discards the partially restored state", async () => {
+  const raw = stored(snapshot(), 3);
+  const fake = createFakeStorage(raw);
   const errors = [];
-  let saveCalls = 0;
   let stateNumber = 0;
-  const persistence = createWithDependencies(null, {
-    createStorage: () => ({
-      load: () => ({ status: "loaded", snapshot: rawSnapshot }),
-      save: () => {
-        saveCalls += 1;
-        return { status: "saved" };
-      }
-    }),
-    createState: ({ onMutation }) => {
+  const persistence = createWithDependencies(fake, {
+    createState: () => {
       stateNumber += 1;
       if (stateNumber === 1) {
         return {
           restoreSnapshot() {
             throw new Error("partial restore");
-          },
-          getSnapshot() {
-            return {
-              profile: null,
-              employmentRecords: [],
-              achievementRecords: [],
-              jobs: [],
-              requirements: [],
-              achievementMappings: []
-            };
           }
         };
       }
-      let currentProfile = null;
-      return {
-        restored: false,
-        restoreSnapshot() {
-          throw new Error("fresh state must not be restored");
-        },
-        createProfile(input, { id, createdAt }) {
-          currentProfile = {
-            id,
-            ...input,
-            createdAt,
-            updatedAt: createdAt
-          };
-          onMutation(() => ({
-            profile: currentProfile,
-            employmentRecords: [],
-            achievementRecords: [],
-            jobs: [],
-            requirements: [],
-            achievementMappings: []
-          }));
-          return currentProfile;
-        },
-        getProfile() {
-          return currentProfile;
-        }
-      };
+      return createCareerState();
     }
   }, { onUnexpectedError: (error) => errors.push(error) });
 
   assert.equal(stateNumber, 2);
-  assert.equal(persistence.state.restored, false);
-  const createdProfile = persistence.state.createProfile({
+  assert.equal(persistence.state.getProfile(), null);
+  await assert.rejects(persistence.state.createProfile({
     fullName: "In-memory profile",
     headline: "",
     summary: "",
     skills: []
-  }, { id: "profile-memory", createdAt: timestamp });
-  assert.equal(createdProfile.id, "profile-memory");
-  assert.equal(persistence.state.getProfile().fullName, "In-memory profile");
-  assert.equal(saveCalls, 0);
-  assert.equal(JSON.stringify(rawSnapshot), originalStoredData);
+  }, { id: "profile-memory", createdAt: timestamp }), (error) => error.status === "writes-disabled");
+  assert.equal(persistence.state.getProfile(), null);
+  assert.deepEqual(fake.calls.setItem, []);
+  assert.equal(fake.values.get(storageKey), raw);
   assert.equal(persistence.getStatus().persistentWarning.kind, "unavailable");
   assert.match(errors[0].message, /partial restore/);
 });
 
-test("successful mutations save the complete post-mutation snapshot", () => {
+test("successful mutations save the complete post-mutation snapshot", async () => {
   const fake = createFakeStorage();
-  const persistence = createCareerPersistence(fake);
-  const result = persistence.state.createProfile({
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
+  const result = await persistence.state.createProfile({
     fullName: "Saved profile",
     headline: "",
     summary: "",
@@ -430,8 +587,10 @@ test("successful mutations save the complete post-mutation snapshot", () => {
 
   const saved = JSON.parse(fake.values.get(storageKey));
   assert.equal(result.id, "profile-saved");
-  assert.equal(saved.version, 4);
-  assert.deepEqual(Object.keys(saved), ["version", ...snapshotKeys]);
+  assert.equal(saved.version, 5);
+  assert.deepEqual(Object.keys(saved), ["version", "snapshotRevision", "careerRevision", ...snapshotKeys]);
+  assert.equal(saved.snapshotRevision, 1);
+  assert.equal(saved.careerRevision, 1);
   assert.deepEqual(saved.profile, persistence.state.getProfile());
   assert.deepEqual(saved.employmentRecords, []);
   assert.deepEqual(saved.achievementRecords, []);
@@ -498,61 +657,69 @@ test("valid v1 data is restored as migrated v4 without warning or write", () => 
   assert.equal(fake.values.get(storageKey), raw);
 });
 
-test("v1 data stays intact until a successful mutation saves complete v4", () => {
+test("v1 data stays intact until a successful mutation saves complete v5", async () => {
   const raw = stored(v1Snapshot(), 1);
   const fake = createFakeStorage(raw);
-  const persistence = createCareerPersistence(fake);
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
 
   fake.setError = new Error("write failure");
-  persistence.state.createJob(job("job-1"));
+  await assert.rejects(persistence.state.createJob(job("job-1")), (error) => error.status === "save-failed");
   assert.equal(fake.values.get(storageKey), raw);
-  assert.equal(persistence.state.getJobs().length, 1);
+  assert.equal(persistence.state.getJobs().length, 0);
   assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
   assert.equal(persistence.getStatus().persistentWarning, null);
 
   fake.setError = null;
-  persistence.state.createJob(job("job-2"));
+  await persistence.state.createJob(job("job-2"));
   const saved = JSON.parse(fake.values.get(storageKey));
-  assert.equal(saved.version, 4);
-  assert.deepEqual(Object.keys(saved), ["version", ...snapshotKeys]);
-  assert.deepEqual(saved.jobs.map((record) => record.id), ["job-1", "job-2"]);
+  assert.equal(saved.version, 5);
+  assert.deepEqual(Object.keys(saved), ["version", "snapshotRevision", "careerRevision", ...snapshotKeys]);
+  assert.equal(saved.snapshotRevision, 1);
+  assert.equal(saved.careerRevision, 0);
+  assert.deepEqual(saved.jobs.map((record) => record.id), ["job-2"]);
   assert.deepEqual(saved.employmentRecords, migratedV4(snapshot()).employmentRecords);
   assert.equal(persistence.getStatus().transientWarning, null);
 });
 
-test("job create, update, archive, reactivate, and delete are persisted", () => {
+test("job create, update, archive, reactivate, and delete are persisted", async () => {
   const fake = createFakeStorage();
-  const { state } = createCareerPersistence(fake);
+  const { state } = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
   const savedJobs = () => JSON.parse(fake.values.get(storageKey)).jobs;
   const later = "2025-04-21T10:00:00.000Z";
 
-  state.createJob(job("job-1"));
+  await state.createJob(job("job-1"));
   assert.deepEqual(savedJobs(), [job("job-1")]);
 
-  state.updateJob("job-1", { company: "Other", updatedAt: later });
+  await state.updateJob("job-1", { company: "Other", updatedAt: later });
   assert.equal(savedJobs()[0].company, "Other");
 
-  state.archiveJob("job-1", later);
+  await state.archiveJob("job-1", later);
   assert.equal(savedJobs()[0].status, "archived");
 
-  state.reactivateJob("job-1", later);
+  await state.reactivateJob("job-1", later);
   assert.equal(savedJobs()[0].status, "active");
 
-  state.deleteJob("job-1");
+  await state.deleteJob("job-1");
   assert.deepEqual(savedJobs(), []);
 });
 
-test("no-op job updates do not write", () => {
+test("no-op job updates do not write", async () => {
   const fake = createFakeStorage();
-  const { state } = createCareerPersistence(fake);
-  state.createJob(job("job-1"));
+  const { state } = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
+  await state.createJob(job("job-1"));
   const writes = fake.calls.setItem.length;
 
-  state.updateJob("job-1", { company: "Example Company" });
+  await state.updateJob("job-1", { company: "Example Company" });
   assert.equal(fake.calls.setItem.length, writes);
 });
 
-test("saves keep jobs, requirements, and mappings from restored state", () => {
+test("saves keep jobs, requirements, and mappings from restored state", async () => {
   const data = snapshot({
     jobs: [job("job-1")],
     requirements: [{
@@ -567,9 +734,11 @@ test("saves keep jobs, requirements, and mappings from restored state", () => {
     achievementMappings: [{ id: "mapping-1", requirementId: "requirement-1" }]
   });
   const fake = createFakeStorage(stored(data));
-  const persistence = createCareerPersistence(fake);
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
 
-  persistence.state.updateProfile({
+  await persistence.state.updateProfile({
     fullName: "Updated",
     headline: "",
     summary: "",
@@ -583,7 +752,7 @@ test("saves keep jobs, requirements, and mappings from restored state", () => {
   assert.equal("fitAssessments" in saved, false);
 });
 
-test("v2 migration preserves legacy entries through restore and later v4 persistence", () => {
+test("v2 migration preserves legacy entries through restore and later v5 persistence", async () => {
   const legacyRequirements = [
     { id: "incomplete", jobId: "job-1" },
     null,
@@ -602,19 +771,23 @@ test("v2 migration preserves legacy entries through restore and later v4 persist
   delete data.legacyRequirements;
   const raw = stored(data, 2);
   const fake = createFakeStorage(raw);
-  const persistence = createCareerPersistence(fake);
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
 
   assert.deepEqual(persistence.state.getSnapshot().legacyRequirements, legacyRequirements);
   assert.deepEqual(persistence.state.getRequirements("job-1"), []);
   assert.deepEqual(fake.calls.setItem, []);
   assert.equal(fake.values.get(storageKey), raw);
 
-  persistence.state.updateJob("job-1", {
+  await persistence.state.updateJob("job-1", {
     notes: "Unrelated mutation",
     updatedAt: "2025-04-21T10:00:00.000Z"
   });
   const saved = JSON.parse(fake.values.get(storageKey));
-  assert.equal(saved.version, 4);
+  assert.equal(saved.version, 5);
+  assert.equal(saved.snapshotRevision, 1);
+  assert.equal(saved.careerRevision, 0);
   assert.deepEqual(saved.legacyRequirements, legacyRequirements);
   assert.deepEqual(saved.achievementMappings, data.achievementMappings);
   assert.deepEqual(saved.achievementRecords, migratedV4(data).achievementRecords);
@@ -629,7 +802,7 @@ test("current v3 envelopes load without a warning", () => {
   assert.equal(persistence.getStatus().persistentWarning, null);
 });
 
-test("corrupt v2 data and unsupported future versions are never overwritten by job mutations", () => {
+test("corrupt v2 data and unsupported future versions are never overwritten by job mutations", async () => {
   for (const [raw, kind] of [
     [stored({ ...snapshot(), jobs: "bad" }, 2), "corrupt"],
     [stored(snapshot(), 4), "corrupt"],
@@ -639,20 +812,23 @@ test("corrupt v2 data and unsupported future versions are never overwritten by j
     const persistence = createCareerPersistence(fake);
 
     assert.equal(persistence.getStatus().persistentWarning.kind, kind);
-    persistence.state.createJob(job("job-1"));
+    await assert.rejects(persistence.state.createJob(job("job-1")), (error) => error.status === "writes-disabled");
     assert.equal(fake.values.get(storageKey), raw);
-    assert.equal(persistence.state.getJobs().length, 1);
+    assert.equal(persistence.state.getJobs().length, 0);
+    assert.deepEqual(fake.calls.setItem, []);
     assert.equal(persistence.getStatus().persistentWarning.kind, kind);
     assert.equal(persistence.getStatus().transientWarning.kind, "write-disabled");
   }
 });
 
-test("verification changes and employment deletion are persisted correctly", () => {
+test("verification changes and employment deletion are persisted correctly", async () => {
   const fake = createFakeStorage();
-  const persistence = createCareerPersistence(fake);
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
   const state = persistence.state;
 
-  state.addEmploymentRecord({
+  await state.addEmploymentRecord({
     employer: "Employer",
     roleTitle: "Role",
     startDate: "2020-01-01",
@@ -660,7 +836,7 @@ test("verification changes and employment deletion are persisted correctly", () 
     isCurrent: true,
     responsibilities: []
   }, { id: "employment-1", createdAt: timestamp });
-  const created = state.addAchievementRecord({
+  const created = await state.addAchievementRecord({
     title: "Achievement",
     context: "",
     contribution: "Contribution",
@@ -671,30 +847,32 @@ test("verification changes and employment deletion are persisted correctly", () 
     evidence: [],
     employmentId: "employment-1"
   }, { id: "achievement-1", createdAt: timestamp });
-  state.updateAchievementVerificationStatus(created.id, "verified", timestamp);
+  await state.updateAchievementVerificationStatus(created.id, "verified", timestamp);
   let saved = JSON.parse(fake.values.get(storageKey));
   assert.equal(saved.achievementRecords[0].verificationStatus, "verified");
 
-  state.deleteEmploymentRecord("employment-1");
+  await state.deleteEmploymentRecord("employment-1");
   saved = JSON.parse(fake.values.get(storageKey));
   assert.deepEqual(saved.employmentRecords, []);
   assert.equal(saved.achievementRecords[0].employmentId, null);
   assert.equal(saved.achievementRecords[0].verificationStatus, "unverified");
 });
 
-test("reloads matching source records and recalculates the Fit Assessment", () => {
+test("reloads matching source records and recalculates the Fit Assessment", async () => {
   const fake = createFakeStorage();
-  const persistence = createCareerPersistence(fake);
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
   const state = persistence.state;
 
-  state.createJob(createJobRecord({
+  await state.createJob(createJobRecord({
     company: "Example Company",
     roleTitle: "Engineer"
   }, {
     id: "job-1",
     createdAt: timestamp
   }));
-  state.createRequirement(createRequirementRecord({
+  await state.createRequirement(createRequirementRecord({
     jobId: "job-1",
     description: "Mandatory requirement",
     category: "experience",
@@ -703,7 +881,7 @@ test("reloads matching source records and recalculates the Fit Assessment", () =
     id: "requirement-mandatory",
     createdAt: timestamp
   }));
-  state.createRequirement(createRequirementRecord({
+  await state.createRequirement(createRequirementRecord({
     jobId: "job-1",
     description: "Preferred requirement",
     category: "skill",
@@ -712,35 +890,35 @@ test("reloads matching source records and recalculates the Fit Assessment", () =
     id: "requirement-preferred",
     createdAt: timestamp
   }));
-  state.addAchievementRecord({
+  await state.addAchievementRecord({
     title: "Verified achievement",
     contribution: "Delivered a measurable result"
   }, {
     id: "achievement-verified",
     createdAt: timestamp
   });
-  state.addAchievementRecord({
+  await state.addAchievementRecord({
     title: "Unverified achievement",
     contribution: "Completed relevant work"
   }, {
     id: "achievement-unverified",
     createdAt: timestamp
   });
-  state.createAchievementMapping(createAchievementMappingRecord({
+  await state.createAchievementMapping(createAchievementMappingRecord({
     requirementId: "requirement-mandatory",
     achievementId: "achievement-verified"
   }, {
     id: "mapping-mandatory",
     createdAt: timestamp
   }));
-  state.createAchievementMapping(createAchievementMappingRecord({
+  await state.createAchievementMapping(createAchievementMappingRecord({
     requirementId: "requirement-preferred",
     achievementId: "achievement-unverified"
   }, {
     id: "mapping-preferred",
     createdAt: timestamp
   }));
-  state.updateAchievementVerificationStatus(
+  await state.updateAchievementVerificationStatus(
     "achievement-verified",
     "verified",
     timestamp
@@ -748,12 +926,14 @@ test("reloads matching source records and recalculates the Fit Assessment", () =
 
   assert.ok(fake.calls.setItem.length > 0);
   const saved = JSON.parse(fake.values.get(storageKey));
-  assert.equal(saved.version, 4);
+  assert.equal(saved.version, 5);
   assert.equal("fitAssessments" in saved, false);
 
   const writesBeforeReload = fake.calls.setItem.length;
   const readsBeforeReload = fake.calls.getItem.length;
-  const reloadedPersistence = createCareerPersistence(fake);
+  const reloadedPersistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
   const restoredState = reloadedPersistence.state;
 
   assert.equal(fake.calls.getItem.length, readsBeforeReload + 1);
@@ -811,7 +991,7 @@ test("reloads matching source records and recalculates the Fit Assessment", () =
   assert.deepEqual(preferredResult.verifiedAchievementIds, []);
   assert.deepEqual(preferredResult.unverifiedAchievementIds, ["achievement-unverified"]);
 
-  restoredState.updateAchievementVerificationStatus(
+  await restoredState.updateAchievementVerificationStatus(
     "achievement-unverified",
     "verified",
     "2025-04-21T14:30:00.000Z"
@@ -837,32 +1017,33 @@ test("reloads matching source records and recalculates the Fit Assessment", () =
   );
 });
 
-test("failed writes preserve in-memory mutations and a later save clears the warning", () => {
+test("failed writes roll back mutations and a later save clears the warning", async () => {
   const fake = createFakeStorage();
   fake.setError = new Error("write failure");
-  const persistence = createCareerPersistence(fake);
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
 
-  persistence.state.createProfile({
+  const profile = {
     fullName: "In-memory profile",
     headline: "",
     summary: "",
     skills: []
-  }, { id: "profile-1", createdAt: timestamp });
-  assert.equal(persistence.state.getProfile().id, "profile-1");
+  };
+  await assert.rejects(persistence.state.createProfile(profile, { id: "profile-1", createdAt: timestamp }),
+    (error) => error.status === "save-failed");
+  assert.equal(persistence.state.getProfile(), null);
+  assert.equal(fake.values.has(storageKey), false);
   assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
 
   fake.setError = null;
-  persistence.state.updateProfile({
-    fullName: "Updated profile",
-    headline: "",
-    summary: "",
-    skills: []
-  }, timestamp);
+  await persistence.state.createProfile({ ...profile, fullName: "Updated profile" },
+    { id: "profile-1", createdAt: timestamp });
   assert.equal(persistence.getStatus().transientWarning, null);
   assert.equal(JSON.parse(fake.values.get(storageKey)).profile.fullName, "Updated profile");
 });
 
-test("successful saves never clear corrupt or unsupported warnings", () => {
+test("blocked writes never clear corrupt or unsupported warnings", async () => {
   for (const [raw, kind] of [
     ["bad JSON", "corrupt"],
     [stored(snapshot(), 99), "unsupported-version"],
@@ -871,18 +1052,21 @@ test("successful saves never clear corrupt or unsupported warnings", () => {
     const fake = createFakeStorage(raw);
     const persistence = createCareerPersistence(fake);
 
-    persistence.state.createProfile({
+    await assert.rejects(persistence.state.createProfile({
       fullName: "Profile",
       headline: "",
       summary: "",
       skills: []
-    }, { id: "profile-1", createdAt: timestamp });
+    }, { id: "profile-1", createdAt: timestamp }), (error) => error.status === "writes-disabled");
     assert.equal(persistence.getStatus().persistentWarning.kind, kind);
     assert.equal(persistence.getStatus().transientWarning.kind, "write-disabled");
+    assert.equal(persistence.state.getProfile(), null);
+    assert.equal(fake.values.get(storageKey), raw);
+    assert.deepEqual(fake.calls.setItem, []);
   }
 });
 
-test("invalid, fidelity, and disabled save outcomes do not report success", () => {
+test("invalid, fidelity, and disabled save outcomes do not report success", async () => {
   for (const [saveStatus, warningKind] of [
     ["invalid-snapshot", "invalid-snapshot"],
     ["json-fidelity-error", "json-fidelity-error"],
@@ -892,21 +1076,29 @@ test("invalid, fidelity, and disabled save outcomes do not report success", () =
     const persistence = createWithDependencies(fake, {
       createStorage: () => ({
         load: () => ({ status: "missing" }),
-        save: () => ({ status: saveStatus })
+        createWriter: (options) => createSnapshotWriter({
+          ...options,
+          storage: {
+            load: () => ({ status: "missing", snapshot: options.initialSnapshot, snapshotRevision: 0, careerRevision: 0 }),
+            save: () => ({ status: saveStatus })
+          }
+        })
       })
-    });
+    }, { locks: { request: (name, options, callback) => callback() }, secureContext: true });
 
-    persistence.state.createProfile({
+    await assert.rejects(persistence.state.createProfile({
       fullName: "Profile",
       headline: "",
       summary: "",
       skills: []
-    }, { id: "profile-1", createdAt: timestamp });
+    }, { id: "profile-1", createdAt: timestamp }), (error) => error.status === "save-failed" && error.cause === saveStatus);
     assert.equal(persistence.getStatus().transientWarning.kind, warningKind);
+    assert.equal(persistence.state.getProfile(), null);
+    assert.equal(fake.values.has(storageKey), false);
   }
 });
 
-test("unsaved mutations never emit success notifications in protected or failed storage states", () => {
+test("unsaved mutations never emit success notifications in protected or failed storage states", async () => {
   const historical = JSON.stringify({
     version: 2, profile: null, employmentRecords: [], achievementRecords: [],
     jobs: [], requirements: [{ score: 0 }], achievementMappings: []
@@ -918,7 +1110,7 @@ test("unsaved mutations never emit success notifications in protected or failed 
     { name: "corrupt", raw: "not JSON", persistent: "corrupt", transient: "write-disabled" },
     { name: "unsupported", raw: stored(snapshot(), 99), persistent: "unsupported-version", transient: "write-disabled" },
     { name: "unsafe integer", raw: unsafe, persistent: "read-only", transient: "write-disabled" },
-    { name: "unavailable read", raw: null, persistent: "unavailable", transient: null, getError: true },
+    { name: "unavailable read", raw: null, persistent: "unavailable", transient: "write-disabled", getError: true },
     { name: "write failure", raw: null, persistent: null, transient: "write-failed", setError: true }
   ];
 
@@ -926,29 +1118,32 @@ test("unsaved mutations never emit success notifications in protected or failed 
     const fake = createFakeStorage(entry.raw);
     if (entry.getError) fake.getError = new Error("read failure");
     if (entry.setError) fake.setError = new Error("write failure");
-    const persistence = createCareerPersistence(fake);
+    const persistence = createCareerPersistence(fake, {
+      locks: { request: (name, options, callback) => callback() }, secureContext: true
+    });
     const state = createPersistenceMutationState(persistence);
     const messages = [];
     const notifications = createPersistenceNotifications({
       show: (type, message) => messages.push({ type, message })
     }, persistence);
 
-    state.createProfile({
+    const operation = state.createProfile({
       fullName: "In-memory profile", headline: "", summary: "", skills: []
     }, { id: "profile", createdAt: timestamp });
-    notifications.show("success", "Profile created.");
+    await assert.rejects(operation);
+    await notifications.show("success", "Profile created.", operation);
 
-    assert.equal(persistence.state.getProfile().fullName, "In-memory profile", entry.name);
+    assert.equal(persistence.state.getProfile(), null, entry.name);
     assert.equal(persistence.getStatus().persistentWarning?.kind ?? null, entry.persistent, entry.name);
     assert.equal(persistence.getStatus().transientWarning?.kind ?? null, entry.transient, entry.name);
-    assert.notEqual(persistence.getMutationSaveOutcome(), "saved", entry.name);
+    assert.notEqual(await persistence.getOperationOutcome(operation), "saved", entry.name);
     assert.equal(messages[0].type, "error", entry.name);
     assert.match(messages[0].message, /Saving could not be completed/, entry.name);
     assert.equal(fake.values.get(storageKey) ?? null, entry.raw, entry.name);
   }
 });
 
-test("fractional precision loss blocks hydration and suppresses mutation success notifications", () => {
+test("fractional precision loss blocks hydration and suppresses mutation success notifications", async () => {
   const v1 = v1Snapshot();
   v1.achievementRecords[0].evidence = [{ score: 1 }];
   const v2 = snapshot({ requirements: [{ score: 1 }] });
@@ -969,11 +1164,12 @@ test("fractional precision loss blocks hydration and suppresses mutation success
     assert.deepEqual(persistence.state.getSnapshot().import.sessions, [], `version ${version}`);
     assert.equal(persistence.getStatus().persistentWarning.kind, "read-only");
     assert.match(persistence.getStatus().persistentWarning.message, /not been loaded.*cannot be saved/);
-    persistence.state.createJob(job("new-job"));
-    notifications.show("success", "Job created.");
-    assert.equal(persistence.getMutationSaveOutcome(), "writes-disabled");
+    const operation = persistence.state.createJob(job("new-job"));
+    await assert.rejects(operation, (error) => error.status === "writes-disabled");
+    await notifications.show("success", "Job created.", operation);
+    assert.equal(await persistence.getOperationOutcome(operation), "writes-disabled");
     assert.equal(persistence.getStatus().transientWarning.kind, "write-disabled");
-    assert.equal(persistence.state.getJobs()[0].id, "new-job");
+    assert.deepEqual(persistence.state.getJobs(), []);
     assert.equal(messages.length, 1);
     assert.equal(messages[0].type, "error");
     assert.match(messages[0].message, /Saving could not be completed/);
@@ -982,10 +1178,12 @@ test("fractional precision loss blocks hydration and suppresses mutation success
   }
 });
 
-test("successful saves and retries emit success, while unchanged mutations suppress notifications", () => {
+test("successful saves and retries emit success, while unchanged mutations suppress notifications", async () => {
   const fake = createFakeStorage();
   fake.setError = new Error("write failure");
-  const persistence = createCareerPersistence(fake);
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
   const state = createPersistenceMutationState(persistence);
   const messages = [];
   const notifications = createPersistenceNotifications({
@@ -993,33 +1191,38 @@ test("successful saves and retries emit success, while unchanged mutations suppr
   }, persistence);
   const input = { fullName: "Profile", headline: "", summary: "", skills: [] };
 
-  state.createProfile(input, {
+  const failed = state.createProfile(input, {
     id: "profile", createdAt: timestamp
   });
-  notifications.show("success", "Profile created.");
+  await assert.rejects(failed, (error) => error.status === "save-failed");
+  await notifications.show("success", "Profile created.", failed);
   assert.equal(messages.at(-1).type, "error");
   assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
 
   fake.setError = null;
-  state.updateProfile({ ...input, fullName: "Retry" }, timestamp);
-  notifications.show("success", "Profile updated.");
+  const retry = state.createProfile({ ...input, fullName: "Retry" }, { id: "profile", createdAt: timestamp });
+  await retry;
+  await notifications.show("success", "Profile updated.", retry);
   assert.deepEqual(messages.at(-1), { type: "success", message: "Profile updated." });
-  assert.equal(persistence.getMutationSaveOutcome(), "saved");
+  assert.equal(await persistence.getOperationOutcome(retry), "saved");
   assert.equal(persistence.getStatus().transientWarning, null);
   assert.equal(JSON.parse(fake.values.get(storageKey)).profile.fullName, "Retry");
 
-  state.createJob(job("job-1"));
-  state.updateJob("job-1", { company: "Example Company" });
+  await state.createJob(job("job-1"));
+  const unchanged = state.updateJob("job-1", { company: "Example Company" });
+  await unchanged;
   const messageCount = messages.length;
-  notifications.show("success", "Profile updated.");
-  assert.equal(persistence.getMutationSaveOutcome(), "unchanged");
+  await notifications.show("success", "Profile updated.", unchanged);
+  assert.equal(await persistence.getOperationOutcome(unchanged), "unchanged");
   assert.equal(messages.length, messageCount);
 });
 
-test("direct and application state mutations track saves and unchanged outcomes exactly once", () => {
+test("direct and application state mutations track saves and unchanged outcomes exactly once", async () => {
   for (const useWrapper of [false, true]) {
     const fake = createFakeStorage();
-    const persistence = createCareerPersistence(fake);
+    const persistence = createCareerPersistence(fake, {
+      locks: { request: (name, options, callback) => callback() }, secureContext: true
+    });
     const state = useWrapper ? createPersistenceMutationState(persistence) : persistence.state;
     const messages = [];
     const notifications = createPersistenceNotifications({
@@ -1027,42 +1230,134 @@ test("direct and application state mutations track saves and unchanged outcomes 
     }, persistence);
 
     assert.equal(createPersistenceMutationState(persistence), persistence.state);
-    state.createJob(job("job-1"));
+    const created = state.createJob(job("job-1"));
+    await created;
     assert.equal(fake.calls.setItem.length, 1);
-    assert.equal(persistence.getMutationSaveOutcome(), "saved");
-    notifications.show("success", "Job created.");
+    assert.equal(await persistence.getOperationOutcome(created), "saved");
+    await notifications.show("success", "Job created.", created);
     assert.deepEqual(messages, [{ type: "success", message: "Job created." }]);
 
-    state.updateJob("job-1", { company: "Example Company" });
-    assert.equal(persistence.getMutationSaveOutcome(), "unchanged");
+    const unchanged = state.updateJob("job-1", { company: "Example Company" });
+    await unchanged;
+    assert.equal(await persistence.getOperationOutcome(unchanged), "unchanged");
     assert.equal(fake.calls.setItem.length, 1);
-    notifications.show("success", "Job updated.");
+    await notifications.show("success", "Job updated.", unchanged);
     assert.equal(messages.length, 1);
 
-    state.updateJob("job-1", { company: "New Company", updatedAt: timestamp });
+    const updated = state.updateJob("job-1", { company: "New Company", updatedAt: timestamp });
+    await updated;
     assert.equal(fake.calls.setItem.length, 2);
-    assert.equal(persistence.getMutationSaveOutcome(), "saved");
+    assert.equal(await persistence.getOperationOutcome(updated), "saved");
     assert.equal(JSON.parse(fake.values.get(storageKey)).jobs[0].company, "New Company");
-    notifications.show("success", "Job updated.");
+    await notifications.show("success", "Job updated.", updated);
     assert.deepEqual(messages.at(-1), { type: "success", message: "Job updated." });
 
-    assert.throws(() => state.updateJob("missing", { company: "Other" }));
-    assert.equal(persistence.getMutationSaveOutcome(), null);
+    const invalid = state.updateJob("missing", { company: "Other" });
+    await assert.rejects(invalid);
+    assert.equal(await persistence.getOperationOutcome(invalid), "error");
     assert.equal(fake.calls.setItem.length, 2);
   }
 });
 
-test("a failed outer save retains its outcome when a status callback performs a no-op", () => {
+test("success notifications wait for their own operation and fail closed without one", async () => {
+  const fake = createFakeStorage();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: async (name, options, callback) => { await gate; return callback(); } },
+    secureContext: true
+  });
+  const messages = [];
+  const notifications = createPersistenceNotifications({
+    show: (type, message) => messages.push({ type, message })
+  }, persistence);
+  const operation = persistence.state.createJob(job());
+  const notification = notifications.show("success", "Job created.", operation);
+  await Promise.resolve();
+  assert.deepEqual(messages, []);
+  assert.equal(fake.values.has(storageKey), false);
+  release();
+  await operation;
+  await notification;
+  assert.deepEqual(messages, [{ type: "success", message: "Job created." }]);
+  await notifications.show("success", "Unbound.");
+  assert.equal(messages.at(-1).type, "error");
+});
+
+test("a successful reentrant mutation must not turn a failed mutation into a success notification", async () => {
   const fake = createFakeStorage();
   let persistence;
-  let nestedOutcome;
-  let outerAttempt;
+  let nested;
   persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onStatusChange(status) {
-      if (status.transientWarning?.kind === "write-failed") {
-        outerAttempt = persistence.getMutationSaveOutcome();
-        persistence.state.updateJob("job-1", { company: "Changed" });
-        nestedOutcome = persistence.getMutationSaveOutcome();
+      if (status.transientWarning?.kind === "write-failed" && !nested) {
+        fake.setError = null;
+        nested = persistence.state.updateJob("job-1", { notes: "Nested", updatedAt: timestamp });
+      }
+    }
+  });
+  await persistence.state.createJob(job());
+  fake.setError = new Error("write failure");
+  const outer = persistence.state.updateJob("job-1", { company: "Changed", updatedAt: timestamp });
+  await assert.rejects(outer, (error) => error.status === "save-failed");
+  await nested;
+  const messages = [];
+  const notifications = createPersistenceNotifications({
+    show: (type, message) => messages.push({ type, message })
+  }, persistence);
+  await notifications.show("success", "Job updated.", outer);
+  assert.equal(messages[0].type, "error");
+  assert.equal(persistence.state.getJobs()[0].company, "Example Company");
+  assert.equal(persistence.state.getJobs()[0].notes, "Nested");
+});
+
+test("a failed reentrant mutation must not turn a successful mutation into an error notification", async () => {
+  const fake = createFakeStorage();
+  let persistence;
+  let nested;
+  let triggerNested = false;
+  persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
+    onStatusChange(status) {
+      if (triggerNested && !status.transientWarning && !nested) {
+        fake.setError = new Error("nested write failure");
+        nested = persistence.state.updateJob("job-1", { notes: "Nested", updatedAt: timestamp });
+      }
+    }
+  });
+  await persistence.state.createJob(job());
+  fake.setError = new Error("outer setup failure");
+  await assert.rejects(persistence.state.updateJob("job-1", { company: "Failure", updatedAt: timestamp }));
+  fake.setError = null;
+  triggerNested = true;
+  const outer = persistence.state.updateJob("job-1", { company: "Success", updatedAt: timestamp });
+  await outer;
+  await assert.rejects(nested, (error) => error.status === "save-failed");
+  const messages = [];
+  const notifications = createPersistenceNotifications({
+    show: (type, message) => messages.push({ type, message })
+  }, persistence);
+  await notifications.show("success", "Job updated.", outer);
+  await notifications.show("success", "Nested updated.", nested);
+  assert.deepEqual(messages.map(({ type }) => type), ["success", "error"]);
+  assert.equal(persistence.state.getJobs()[0].company, "Success");
+  assert.equal(persistence.state.getJobs()[0].notes, job().notes);
+  assert.equal(JSON.parse(fake.values.get(storageKey)).jobs[0].company, "Success");
+});
+
+test("a failed outer save retains its outcome when a status callback performs a no-op", async () => {
+  const fake = createFakeStorage();
+  let persistence;
+  let nested;
+  persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
+    onStatusChange(status) {
+      if (status.transientWarning?.kind === "write-failed" && !nested) {
+        nested = persistence.state.updateJob("job-1", { company: "Example Company" });
       }
     }
   });
@@ -1072,36 +1367,36 @@ test("a failed outer save retains its outcome when a status callback performs a 
     show: (type, message) => messages.push({ type, message })
   }, persistence);
 
-  state.createJob(job());
+  await state.createJob(job());
   const original = fake.values.get(storageKey);
   fake.setError = new Error("write failure");
-  state.updateJob("job-1", { company: "Changed", updatedAt: timestamp });
+  const outer = state.updateJob("job-1", { company: "Changed", updatedAt: timestamp });
+  await assert.rejects(outer, (error) => error.status === "save-failed");
+  await nested;
 
-  assert.equal(outerAttempt, "write-failed");
-  assert.equal(nestedOutcome, "unchanged");
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
+  assert.equal(await persistence.getOperationOutcome(outer), "save-failed");
+  assert.equal(await persistence.getOperationOutcome(nested), "unchanged");
   assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
   assert.equal(fake.calls.setItem.length, 2);
   assert.equal(fake.values.get(storageKey), original);
-  assert.equal(state.getJobs()[0].company, "Changed");
-  notifications.show("success", "Job updated.");
+  assert.equal(state.getJobs()[0].company, "Example Company");
+  await notifications.show("success", "Job updated.", outer);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, "error");
   assert.match(messages[0].message, /Saving could not be completed/);
 });
 
-test("a nested successful save does not change a failed outer save outcome", () => {
+test("a nested successful save does not change a failed outer save outcome", async () => {
   const fake = createFakeStorage();
   let persistence;
-  let nestedOutcome;
-  let outerAttempt;
+  let nested;
   persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onStatusChange(status) {
-      if (status.transientWarning?.kind === "write-failed") {
-        outerAttempt = persistence.getMutationSaveOutcome();
+      if (status.transientWarning?.kind === "write-failed" && !nested) {
         fake.setError = null;
-        persistence.state.updateJob("job-1", { notes: "Nested", updatedAt: timestamp });
-        nestedOutcome = persistence.getMutationSaveOutcome();
+        nested = persistence.state.updateJob("job-1", { notes: "Nested", updatedAt: timestamp });
       }
     }
   });
@@ -1111,38 +1406,38 @@ test("a nested successful save does not change a failed outer save outcome", () 
     show: (type, message) => messages.push({ type, message })
   }, persistence);
 
-  state.createJob(job());
+  await state.createJob(job());
   fake.setError = new Error("write failure");
-  state.updateJob("job-1", { company: "Changed", updatedAt: timestamp });
+  const outer = state.updateJob("job-1", { company: "Changed", updatedAt: timestamp });
+  await assert.rejects(outer, (error) => error.status === "save-failed");
+  await nested;
 
-  assert.equal(outerAttempt, "write-failed");
-  assert.equal(nestedOutcome, "saved");
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
+  assert.equal(await persistence.getOperationOutcome(outer), "save-failed");
+  assert.equal(await persistence.getOperationOutcome(nested), "saved");
   assert.equal(persistence.getStatus().transientWarning, null);
   assert.equal(fake.calls.setItem.length, 3);
   const savedJob = JSON.parse(fake.values.get(storageKey)).jobs[0];
-  assert.equal(savedJob.company, "Changed");
+  assert.equal(savedJob.company, "Example Company");
   assert.equal(savedJob.notes, "Nested");
   assert.deepEqual(state.getJobs()[0], savedJob);
-  notifications.show("success", "Job updated.");
+  await notifications.show("success", "Job updated.", outer);
   assert.deepEqual(messages, [{
     type: "error",
     message: "Saving could not be completed. Check the persistence status before retrying."
   }]);
 });
 
-test("a nested successful save can replace the failed outer mutation's field", () => {
+test("a nested successful save can replace the failed outer mutation's field", async () => {
   const fake = createFakeStorage();
   let persistence;
-  let outerAttempt;
-  let nestedOutcome;
+  let nested;
   persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onStatusChange(status) {
-      if (status.transientWarning?.kind === "write-failed") {
-        outerAttempt = persistence.getMutationSaveOutcome();
+      if (status.transientWarning?.kind === "write-failed" && !nested) {
         fake.setError = null;
-        persistence.state.updateJob("job-1", { company: "Override", updatedAt: timestamp });
-        nestedOutcome = persistence.getMutationSaveOutcome();
+        nested = persistence.state.updateJob("job-1", { company: "Override", updatedAt: timestamp });
       }
     }
   });
@@ -1151,35 +1446,35 @@ test("a nested successful save can replace the failed outer mutation's field", (
     show: (type, message) => messages.push({ type, message })
   }, persistence);
 
-  persistence.state.createJob(job());
+  await persistence.state.createJob(job());
   fake.setError = new Error("write failure");
-  persistence.state.updateJob("job-1", { company: "Outer", updatedAt: timestamp });
+  const outer = persistence.state.updateJob("job-1", { company: "Outer", updatedAt: timestamp });
+  await assert.rejects(outer, (error) => error.status === "save-failed");
+  await nested;
 
-  assert.equal(outerAttempt, "write-failed");
-  assert.equal(nestedOutcome, "saved");
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
+  assert.equal(await persistence.getOperationOutcome(outer), "save-failed");
+  assert.equal(await persistence.getOperationOutcome(nested), "saved");
   assert.equal(persistence.getStatus().transientWarning, null);
   assert.equal(fake.calls.setItem.length, 3);
   assert.deepEqual(JSON.parse(fake.values.get(storageKey)).jobs, [
     job("job-1", { company: "Override" })
   ]);
-  notifications.show("success", "Job updated.");
+  await notifications.show("success", "Job updated.", outer);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, "error");
   assert.match(messages[0].message, /Saving could not be completed/);
 });
 
-test("failed outer and nested saves both remain failed", () => {
+test("failed outer and nested saves both remain failed", async () => {
   const fake = createFakeStorage();
   let persistence;
-  let outerAttempt;
-  let nestedOutcome;
+  let nested;
   persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onStatusChange(status) {
-      if (status.transientWarning?.kind === "write-failed") {
-        outerAttempt = persistence.getMutationSaveOutcome();
-        persistence.state.updateJob("job-1", { notes: "Nested", updatedAt: timestamp });
-        nestedOutcome = persistence.getMutationSaveOutcome();
+      if (status.transientWarning?.kind === "write-failed" && !nested) {
+        nested = persistence.state.updateJob("job-1", { notes: "Nested", updatedAt: timestamp });
       }
     }
   });
@@ -1188,59 +1483,61 @@ test("failed outer and nested saves both remain failed", () => {
     show: (type, message) => messages.push({ type, message })
   }, persistence);
 
-  persistence.state.createJob(job());
+  await persistence.state.createJob(job());
   const original = fake.values.get(storageKey);
   fake.setError = new Error("write failure");
-  persistence.state.updateJob("job-1", { company: "Changed", updatedAt: timestamp });
+  const outer = persistence.state.updateJob("job-1", { company: "Changed", updatedAt: timestamp });
+  await assert.rejects(outer, (error) => error.status === "save-failed");
+  await assert.rejects(nested, (error) => error.status === "save-failed");
 
-  assert.equal(outerAttempt, "write-failed");
-  assert.equal(nestedOutcome, "write-failed");
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
+  assert.equal(await persistence.getOperationOutcome(outer), "save-failed");
+  assert.equal(await persistence.getOperationOutcome(nested), "save-failed");
   assert.equal(fake.calls.setItem.length, 3);
   assert.equal(fake.values.get(storageKey), original);
-  assert.equal(persistence.state.getJobs()[0].notes, "Nested");
-  notifications.show("success", "Job updated.");
+  assert.deepEqual(persistence.state.getJobs()[0], job());
+  await notifications.show("success", "Job updated.", outer);
   assert.equal(messages[0].type, "error");
   assert.match(messages[0].message, /Saving could not be completed/);
 });
 
-test("nested mutations cannot overwrite protected bytes", () => {
+test("nested mutations cannot overwrite protected bytes", async () => {
   const raw = "not JSON";
   const fake = createFakeStorage(raw);
   let persistence;
-  let nestedOutcome;
+  let nested;
   persistence = createCareerPersistence(fake, {
     onStatusChange(status) {
       if (status.transientWarning?.kind === "write-disabled") {
-        persistence.state.updateJob("job-1", { notes: "Nested", updatedAt: timestamp });
-        nestedOutcome = persistence.getMutationSaveOutcome();
+        nested = persistence.state.updateJob("job-1", { notes: "Nested", updatedAt: timestamp });
       }
     }
   });
 
-  persistence.state.createJob(job());
+  const outer = persistence.state.createJob(job());
+  await assert.rejects(outer, (error) => error.status === "writes-disabled");
+  await assert.rejects(nested, (error) => error.status === "writes-disabled");
 
-  assert.equal(nestedOutcome, "writes-disabled");
-  assert.equal(persistence.getMutationSaveOutcome(), "writes-disabled");
+  assert.equal(await persistence.getOperationOutcome(nested), "writes-disabled");
+  assert.equal(await persistence.getOperationOutcome(outer), "writes-disabled");
+  assert.deepEqual(persistence.state.getJobs(), []);
   assert.equal(persistence.getStatus().persistentWarning.kind, "corrupt");
   assert.equal(fake.values.get(storageKey), raw);
   assert.deepEqual(fake.calls.setItem, []);
 });
 
-test("a successful outer save retains its outcome when a nested mutation fails", () => {
+test("a successful outer save retains its outcome when a nested mutation fails", async () => {
   const fake = createFakeStorage();
   let persistence;
-  let nestedOutcome;
-  let outerAttempt;
+  let nested;
   let runNested = false;
   persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onStatusChange(status) {
       if (runNested && status.transientWarning === null) {
-        outerAttempt = persistence.getMutationSaveOutcome();
         runNested = false;
         fake.setError = new Error("nested write failure");
-        persistence.state.updateJob("job-1", { notes: "Unsaved nested", updatedAt: timestamp });
-        nestedOutcome = persistence.getMutationSaveOutcome();
+        nested = persistence.state.updateJob("job-1", { notes: "Unsaved nested", updatedAt: timestamp });
       }
     }
   });
@@ -1250,113 +1547,137 @@ test("a successful outer save retains its outcome when a nested mutation fails",
     show: (type, message) => messages.push({ type, message })
   }, persistence);
 
-  state.createJob(job());
+  await state.createJob(job());
   fake.setError = new Error("write failure");
-  state.updateJob("job-1", { company: "Earlier", updatedAt: timestamp });
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
+  await assert.rejects(state.updateJob("job-1", { company: "Earlier", updatedAt: timestamp }));
   fake.setError = null;
   runNested = true;
-  state.updateJob("job-1", { company: "Retry", updatedAt: timestamp });
+  const outer = state.updateJob("job-1", { company: "Retry", updatedAt: timestamp });
+  await outer;
+  await assert.rejects(nested, (error) => error.status === "save-failed");
 
-  assert.equal(outerAttempt, "saved");
-  assert.equal(nestedOutcome, "write-failed");
-  assert.equal(persistence.getMutationSaveOutcome(), "saved");
+  assert.equal(await persistence.getOperationOutcome(outer), "saved");
+  assert.equal(await persistence.getOperationOutcome(nested), "save-failed");
   assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
   assert.equal(fake.calls.setItem.length, 4);
   const savedJob = JSON.parse(fake.values.get(storageKey)).jobs[0];
   assert.equal(savedJob.company, "Retry");
   assert.equal(savedJob.notes, "");
-  assert.equal(state.getJobs()[0].notes, "Unsaved nested");
-  notifications.show("success", "Job updated.");
+  assert.equal(state.getJobs()[0].notes, "");
+  await notifications.show("success", "Job updated.", outer);
   assert.deepEqual(messages, [{ type: "success", message: "Job updated." }]);
 });
 
-test("a third-level successful save preserves each ancestor's own outcome", () => {
+test("a third-level successful save preserves each ancestor's own outcome", async () => {
   const fake = createFakeStorage();
   const outcomes = [];
   const saveResults = ["saved", "invalid-snapshot", "write-failed", "saved"];
   let persistence;
-  let innerOutcome;
-  let middleOutcome;
+  let inner;
+  let middle;
   persistence = createWithDependencies(fake, {
     createStorage(storage) {
       const adapter = createCareerStorage(storage);
       return {
         load: () => adapter.load(),
-        save(snapshot) {
-          const outcome = saveResults[outcomes.length];
-          outcomes.push(outcome);
-          return outcome === "saved" ? adapter.save(snapshot) : { status: outcome };
+        createWriter(options) {
+          return createSnapshotWriter({
+            ...options,
+            storage: {
+              load: () => adapter.load(),
+              save(snapshot, revisions) {
+                const outcome = saveResults[outcomes.length];
+                outcomes.push(outcome);
+                if (outcome !== "saved") return { status: outcome };
+                storage.setItem(storageKey, JSON.stringify({ version: 5, ...revisions, ...snapshot }));
+                return { status: "saved" };
+              }
+            }
+          });
         }
       };
     }
   }, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onStatusChange(status) {
-      if (status.transientWarning?.kind === "invalid-snapshot") {
-        assert.equal(persistence.getMutationSaveOutcome(), "invalid-snapshot");
-        persistence.state.updateJob("job-1", { notes: "Middle", updatedAt: timestamp });
-        middleOutcome = persistence.getMutationSaveOutcome();
-      } else if (status.transientWarning?.kind === "write-failed") {
-        assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
-        persistence.state.updateJob("job-1", { description: "Inner", updatedAt: timestamp });
-        innerOutcome = persistence.getMutationSaveOutcome();
+      if (status.transientWarning?.kind === "invalid-snapshot" && !middle) {
+        middle = persistence.state.updateJob("job-1", { notes: "Middle", updatedAt: timestamp });
+      } else if (status.transientWarning?.kind === "write-failed" && !inner) {
+        inner = persistence.state.updateJob("job-1", { description: "Inner", updatedAt: timestamp });
       }
     }
   });
 
-  persistence.state.createJob(job());
-  persistence.state.updateJob("job-1", { company: "Outer", updatedAt: timestamp });
+  await persistence.state.createJob(job());
+  const outer = persistence.state.updateJob("job-1", { company: "Outer", updatedAt: timestamp });
+  await assert.rejects(outer, (error) => error.status === "save-failed" && error.cause === "invalid-snapshot");
+  await assert.rejects(middle, (error) => error.status === "save-failed" && error.cause === "write-failed");
+  await inner;
 
   assert.deepEqual(outcomes, ["saved", "invalid-snapshot", "write-failed", "saved"]);
-  assert.equal(innerOutcome, "saved");
-  assert.equal(middleOutcome, "write-failed");
-  assert.equal(persistence.getMutationSaveOutcome(), "invalid-snapshot");
+  assert.equal(await persistence.getOperationOutcome(inner), "saved");
+  assert.equal(await persistence.getOperationOutcome(middle), "save-failed");
+  assert.equal(await persistence.getOperationOutcome(outer), "save-failed");
   assert.equal(persistence.getStatus().transientWarning, null);
   assert.equal(fake.calls.setItem.length, 2);
   const savedJob = JSON.parse(fake.values.get(storageKey)).jobs[0];
   assert.deepEqual(savedJob, job("job-1", {
-    company: "Outer", notes: "Middle", description: "Inner"
+    description: "Inner"
   }));
 });
 
-test("three-level conflicting updates keep separate outcomes and persist the last value", () => {
+test("three-level conflicting updates keep separate outcomes and persist the last value", async () => {
   const fake = createFakeStorage();
   const outcomes = [];
   const saveResults = ["saved", "invalid-snapshot", "write-failed", "saved"];
   let persistence;
-  let innerOutcome;
-  let middleOutcome;
+  let inner;
+  let middle;
   persistence = createWithDependencies(fake, {
     createStorage(storage) {
       const adapter = createCareerStorage(storage);
       return {
         load: () => adapter.load(),
-        save(snapshot) {
-          const outcome = saveResults[outcomes.length];
-          outcomes.push(outcome);
-          return outcome === "saved" ? adapter.save(snapshot) : { status: outcome };
+        createWriter(options) {
+          return createSnapshotWriter({
+            ...options,
+            storage: {
+              load: () => adapter.load(),
+              save(snapshot, revisions) {
+                const outcome = saveResults[outcomes.length];
+                outcomes.push(outcome);
+                if (outcome !== "saved") return { status: outcome };
+                storage.setItem(storageKey, JSON.stringify({ version: 5, ...revisions, ...snapshot }));
+                return { status: "saved" };
+              }
+            }
+          });
         }
       };
     }
   }, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onStatusChange(status) {
-      if (status.transientWarning?.kind === "invalid-snapshot") {
-        persistence.state.updateJob("job-1", { company: "Middle", updatedAt: timestamp });
-        middleOutcome = persistence.getMutationSaveOutcome();
-      } else if (status.transientWarning?.kind === "write-failed") {
-        persistence.state.updateJob("job-1", { company: "Inner", updatedAt: timestamp });
-        innerOutcome = persistence.getMutationSaveOutcome();
+      if (status.transientWarning?.kind === "invalid-snapshot" && !middle) {
+        middle = persistence.state.updateJob("job-1", { company: "Middle", updatedAt: timestamp });
+      } else if (status.transientWarning?.kind === "write-failed" && !inner) {
+        inner = persistence.state.updateJob("job-1", { company: "Inner", updatedAt: timestamp });
       }
     }
   });
 
-  persistence.state.createJob(job());
-  persistence.state.updateJob("job-1", { company: "Outer", updatedAt: timestamp });
+  await persistence.state.createJob(job());
+  const outer = persistence.state.updateJob("job-1", { company: "Outer", updatedAt: timestamp });
+  await assert.rejects(outer, (error) => error.status === "save-failed" && error.cause === "invalid-snapshot");
+  await assert.rejects(middle, (error) => error.status === "save-failed" && error.cause === "write-failed");
+  await inner;
 
   assert.deepEqual(outcomes, ["saved", "invalid-snapshot", "write-failed", "saved"]);
-  assert.equal(innerOutcome, "saved");
-  assert.equal(middleOutcome, "write-failed");
-  assert.equal(persistence.getMutationSaveOutcome(), "invalid-snapshot");
+  assert.equal(await persistence.getOperationOutcome(inner), "saved");
+  assert.equal(await persistence.getOperationOutcome(middle), "save-failed");
+  assert.equal(await persistence.getOperationOutcome(outer), "save-failed");
   assert.equal(persistence.getStatus().transientWarning, null);
   assert.equal(fake.calls.setItem.length, 2);
   assert.deepEqual(JSON.parse(fake.values.get(storageKey)).jobs, [
@@ -1364,241 +1685,250 @@ test("three-level conflicting updates keep separate outcomes and persist the las
   ]);
 });
 
-test("a nested retry after a save exception leaves the outer outcome and clears the warning", () => {
+test("a nested retry after a save exception leaves the outer outcome and clears the warning", async () => {
   const fake = createFakeStorage();
   let persistence;
   let throwNext = false;
-  let nestedOutcome;
+  let nested;
   const errors = [];
   persistence = createWithDependencies(fake, {
     createStorage(storage) {
       const adapter = createCareerStorage(storage);
       return {
         load: () => adapter.load(),
-        save(snapshot) {
-          if (throwNext) {
-            throwNext = false;
-            throw new Error("unexpected save error");
-          }
-          return adapter.save(snapshot);
+        createWriter(options) {
+          return createSnapshotWriter({
+            ...options,
+            storage: {
+              load: () => adapter.load(),
+              save(snapshot, revisions) {
+                if (throwNext) {
+                  throwNext = false;
+                  throw new Error("unexpected save error");
+                }
+                storage.setItem(storageKey, JSON.stringify({ version: 5, ...revisions, ...snapshot }));
+                return { status: "saved" };
+              }
+            }
+          });
         }
       };
     }
   }, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onUnexpectedError(error) {
       errors.push(error.message);
-      assert.equal(persistence.getMutationSaveOutcome(), "unexpected-error");
-      persistence.state.updateJob("job-1", { notes: "Retry", updatedAt: timestamp });
-      nestedOutcome = persistence.getMutationSaveOutcome();
+      nested = persistence.state.updateJob("job-1", { notes: "Retry", updatedAt: timestamp });
     }
   });
 
-  persistence.state.createJob(job());
+  await persistence.state.createJob(job());
   throwNext = true;
-  persistence.state.updateJob("job-1", { company: "Outer", updatedAt: timestamp });
+  const outer = persistence.state.updateJob("job-1", { company: "Outer", updatedAt: timestamp });
+  await assert.rejects(outer, (error) => error.status === "save-failed" && error.cause === "unexpected-error");
+  await nested;
 
   assert.deepEqual(errors, ["unexpected save error"]);
-  assert.equal(nestedOutcome, "saved");
-  assert.equal(persistence.getMutationSaveOutcome(), "unexpected-error");
+  assert.equal(await persistence.getOperationOutcome(nested), "saved");
+  assert.equal(await persistence.getOperationOutcome(outer), "save-failed");
   assert.equal(persistence.getStatus().transientWarning, null);
   assert.equal(fake.calls.setItem.length, 2);
   const savedJob = JSON.parse(fake.values.get(storageKey)).jobs[0];
-  assert.equal(savedJob.company, "Outer");
+  assert.equal(savedJob.company, "Example Company");
   assert.equal(savedJob.notes, "Retry");
 });
 
-test("a nested validation exception does not replace the outer failure outcome", () => {
+test("a nested validation exception does not replace the outer failure outcome", async () => {
   const fake = createFakeStorage();
   let persistence;
-  let nestedOutcome;
-  let nestedError;
+  let nested;
   persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onStatusChange(status) {
-      if (status.transientWarning?.kind === "write-failed") {
-        assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
-        try {
-          persistence.state.updateJob("missing", { company: "Other" });
-        } catch (error) {
-          nestedError = error;
-        }
-        nestedOutcome = persistence.getMutationSaveOutcome();
+      if (status.transientWarning?.kind === "write-failed" && !nested) {
+        nested = persistence.state.updateJob("missing", { company: "Other" });
       }
     }
   });
-  persistence.state.createJob(job());
+  await persistence.state.createJob(job());
   const original = fake.values.get(storageKey);
   fake.setError = new Error("write failure");
-  persistence.state.updateJob("job-1", { company: "Outer", updatedAt: timestamp });
+  const outer = persistence.state.updateJob("job-1", { company: "Outer", updatedAt: timestamp });
+  await assert.rejects(outer, (error) => error.status === "save-failed");
+  await assert.rejects(nested, /does not exist/);
 
-  assert.match(nestedError?.message ?? "", /does not exist/);
-  assert.equal(nestedOutcome, null);
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
+  assert.equal(await persistence.getOperationOutcome(nested), "error");
+  assert.equal(await persistence.getOperationOutcome(outer), "save-failed");
   assert.equal(fake.calls.setItem.length, 2);
   assert.equal(fake.values.get(storageKey), original);
+  assert.deepEqual(persistence.state.getJobs()[0], job());
 });
 
-test("explicit runMutation wrappers retain their nested public mutation result", () => {
+test("individual mutation operations retain their results across a retry", async () => {
   const fake = createFakeStorage();
-  const persistence = createCareerPersistence(fake);
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
   fake.setError = new Error("write failure");
 
-  persistence.runMutation(() => persistence.state.createJob(job()));
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
+  const failed = persistence.state.createJob(job());
+  await assert.rejects(failed, (error) => error.status === "save-failed");
+  assert.equal(await persistence.getOperationOutcome(failed), "save-failed");
   assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
   assert.equal(fake.calls.setItem.length, 1);
   assert.equal(fake.values.has(storageKey), false);
 
   fake.setError = null;
-  persistence.runMutation(() => persistence.state.updateJob(
-    "job-1", { company: "Retry", updatedAt: timestamp }
-  ));
-  assert.equal(persistence.getMutationSaveOutcome(), "saved");
+  const retry = persistence.state.createJob(job("job-1", { company: "Retry" }));
+  const result = await retry;
+  assert.equal(result.company, "Retry");
+  assert.equal(await persistence.getOperationOutcome(retry), "saved");
+  assert.equal(await persistence.getOperationOutcome(failed), "save-failed");
   assert.equal(persistence.getStatus().transientWarning, null);
   assert.equal(fake.calls.setItem.length, 2);
   assert.equal(JSON.parse(fake.values.get(storageKey)).jobs[0].company, "Retry");
 });
 
-test("explicit runMutation summarizes the last save attempt, ignoring no-ops", () => {
+test("sequential operations keep separate save, failure, and no-op outcomes", async () => {
   const cases = [
-    { name: "success then failure", steps: ["saved", "write-failed"], outcome: "write-failed", stored: ["first"] },
-    { name: "failure then success", steps: ["write-failed", "saved"], outcome: "saved", stored: ["first", "second"] },
-    { name: "failure then no-op", steps: ["write-failed", "unchanged"], outcome: "write-failed", stored: [] },
-    { name: "two successes", steps: ["saved", "saved"], outcome: "saved", stored: ["first", "second"] },
-    { name: "no mutations", steps: [], outcome: "unchanged", stored: [] }
+    { name: "success then failure", steps: ["saved", "write-failed"], stored: ["first"] },
+    { name: "failure then success", steps: ["write-failed", "saved"], stored: ["second"] },
+    { name: "failure then no-op", steps: ["write-failed", "unchanged"], stored: [] },
+    { name: "two successes", steps: ["saved", "saved"], stored: ["first", "second"] },
+    { name: "no mutations", steps: [], stored: [] }
   ];
 
   for (const entry of cases) {
     const fake = createFakeStorage();
-    const persistence = createCareerPersistence(fake);
+    const persistence = createCareerPersistence(fake, {
+      locks: { request: (name, options, callback) => callback() }, secureContext: true
+    });
     const messages = [];
     const notifications = createPersistenceNotifications({
       show: (type, message) => messages.push({ type, message })
     }, persistence);
-    const outcomes = [];
-
-    const result = persistence.runMutation(() => {
-      for (const [index, step] of entry.steps.entries()) {
-        fake.setError = step === "write-failed" ? new Error("write failure") : null;
-        if (step === "unchanged") {
-          persistence.state.updateJob("first", { company: "Example Company" });
-        } else {
-          persistence.state.createJob(job(index === 0 ? "first" : "second"));
-        }
-        outcomes.push(persistence.getMutationSaveOutcome());
+    await persistence.state.createJob(job("baseline"));
+    const operations = [];
+    for (const [index, step] of entry.steps.entries()) {
+      fake.setError = step === "write-failed" ? new Error("write failure") : null;
+      const operation = step === "unchanged"
+        ? persistence.state.updateJob("baseline", { company: "Example Company" })
+        : persistence.state.createJob(job(index === 0 ? "first" : "second"));
+      operations.push(operation);
+      if (step === "write-failed") {
+        await assert.rejects(operation, (error) => error.status === "save-failed");
+      } else {
+        await operation;
       }
-      return "operation result";
-    });
-
-    assert.equal(result, "operation result", entry.name);
-    assert.deepEqual(outcomes, entry.steps, entry.name);
-    assert.equal(persistence.getMutationSaveOutcome(), entry.outcome, entry.name);
-    const memoryIds = entry.steps.filter((step) => step !== "unchanged")
-      .map((_, index) => index === 0 ? "first" : "second");
-    assert.deepEqual(persistence.state.getJobs(), memoryIds.map((id) => job(id)), entry.name);
-    const raw = fake.values.get(storageKey);
-    assert.deepEqual(raw ? JSON.parse(raw).jobs : [], entry.stored.map((id) => job(id)), entry.name);
-    assert.equal(fake.calls.setItem.length, entry.steps.filter((step) => step !== "unchanged").length, entry.name);
+      await notifications.show("success", "Job saved.", operation);
+    }
+    assert.deepEqual(await Promise.all(operations.map((operation) => persistence.getOperationOutcome(operation))),
+      entry.steps.map((step) => step === "write-failed" ? "save-failed" : step), entry.name);
+    const expected = ["baseline", ...entry.stored].map((id) => job(id));
+    assert.deepEqual(persistence.state.getJobs(), expected, entry.name);
+    assert.deepEqual(JSON.parse(fake.values.get(storageKey)).jobs, expected, entry.name);
+    assert.equal(fake.calls.setItem.length, 1 + entry.steps.filter((step) => step !== "unchanged").length, entry.name);
     assert.equal(
       persistence.getStatus().transientWarning?.kind ?? null,
-      entry.outcome === "write-failed" ? "write-failed" : null,
+      entry.steps.includes("write-failed") && entry.steps.lastIndexOf("write-failed") > entry.steps.lastIndexOf("saved") ? "write-failed" : null,
       entry.name
     );
-    notifications.show("success", "Jobs saved.");
     assert.deepEqual(messages.map((message) => message.type),
-      entry.outcome === "unchanged" ? [] : [entry.outcome === "saved" ? "success" : "error"],
+      entry.steps.filter((step) => step !== "unchanged").map((step) => step === "saved" ? "success" : "error"),
       entry.name);
   }
 });
 
-test("nested explicit wrappers summarize their own attempts without rewriting individual outcomes", () => {
+test("nested asynchronous flows preserve each individual operation outcome", async () => {
   const fake = createFakeStorage();
-  const persistence = createCareerPersistence(fake);
-  const outcomes = [];
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
+  const operations = [];
   const messages = [];
   const notifications = createPersistenceNotifications({
     show: (type, message) => messages.push({ type, message })
   }, persistence);
 
-  persistence.runMutation(() => {
-    persistence.state.createJob(job("first"));
-    outcomes.push(persistence.getMutationSaveOutcome());
-    persistence.runMutation(() => {
-      fake.setError = new Error("write failure");
-      persistence.state.createJob(job("second"));
-      outcomes.push(persistence.getMutationSaveOutcome());
-      persistence.runMutation(() => {
-        fake.setError = null;
-        persistence.state.createJob(job("third"));
-        outcomes.push(persistence.getMutationSaveOutcome());
-      });
-      outcomes.push(persistence.getMutationSaveOutcome());
-      fake.setError = new Error("write failure");
-      persistence.state.createJob(job("fourth"));
-      outcomes.push(persistence.getMutationSaveOutcome());
-    });
-    outcomes.push(persistence.getMutationSaveOutcome());
-    persistence.state.updateJob("fourth", { company: "Example Company" });
-    outcomes.push(persistence.getMutationSaveOutcome());
-  });
+  operations.push(persistence.state.createJob(job("first")));
+  await operations[0];
+  async function nestedFlow() {
+    fake.setError = new Error("write failure");
+    operations.push(persistence.state.createJob(job("second")));
+    await assert.rejects(operations[1], (error) => error.status === "save-failed");
+    async function innerFlow() {
+      fake.setError = null;
+      operations.push(persistence.state.createJob(job("third")));
+      await operations[2];
+    }
+    await innerFlow();
+    fake.setError = new Error("write failure");
+    operations.push(persistence.state.createJob(job("fourth")));
+    await assert.rejects(operations[3], (error) => error.status === "save-failed");
+  }
+  await nestedFlow();
+  operations.push(persistence.state.updateJob("first", { company: "Example Company" }));
+  await operations[4];
 
-  assert.deepEqual(outcomes, ["saved", "write-failed", "saved", "saved", "write-failed", "write-failed", "unchanged"]);
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
+  assert.deepEqual(await Promise.all(operations.map((operation) => persistence.getOperationOutcome(operation))),
+    ["saved", "save-failed", "saved", "save-failed", "unchanged"]);
   assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
   assert.equal(fake.calls.setItem.length, 4);
-  assert.deepEqual(persistence.state.getJobs().map((record) => record.id), ["first", "second", "third", "fourth"]);
-  assert.deepEqual(JSON.parse(fake.values.get(storageKey)).jobs.map((record) => record.id), ["first", "second", "third"]);
-  notifications.show("success", "Jobs saved.");
+  assert.deepEqual(persistence.state.getJobs().map((record) => record.id), ["first", "third"]);
+  assert.deepEqual(JSON.parse(fake.values.get(storageKey)).jobs.map((record) => record.id), ["first", "third"]);
+  await notifications.show("success", "Jobs saved.", operations[3]);
   assert.deepEqual(messages.map((message) => message.type), ["error"]);
 });
 
-test("an explicit wrapper summarizes reentrant attempts while each state mutation keeps its own result", () => {
+test("reentrant async operations retain their own results despite later success", async () => {
   const fake = createFakeStorage();
   let persistence;
-  let nestedOutcome;
+  let nested;
   persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onStatusChange(status) {
-      if (status.transientWarning?.kind === "write-failed") {
+      if (status.transientWarning?.kind === "write-failed" && !nested) {
         fake.setError = null;
-        persistence.state.updateJob("first", { notes: "Nested", updatedAt: timestamp });
-        nestedOutcome = persistence.getMutationSaveOutcome();
+        nested = persistence.state.updateJob("first", { notes: "Nested", updatedAt: timestamp });
       }
     }
   });
-  let mutationOutcome;
   const messages = [];
   const notifications = createPersistenceNotifications({
     show: (type, message) => messages.push({ type, message })
   }, persistence);
 
-  persistence.runMutation(() => {
-    fake.setError = new Error("write failure");
-    persistence.state.createJob(job("first"));
-    mutationOutcome = persistence.getMutationSaveOutcome();
-  });
-
-  assert.equal(mutationOutcome, "write-failed");
-  assert.equal(nestedOutcome, "saved");
-  assert.equal(persistence.getMutationSaveOutcome(), "saved");
+  await persistence.state.createJob(job("first"));
+  fake.setError = new Error("write failure");
+  const outer = persistence.state.updateJob("first", { company: "Failed", updatedAt: timestamp });
+  await assert.rejects(outer, (error) => error.status === "save-failed");
+  await nested;
+  assert.equal(await persistence.getOperationOutcome(outer), "save-failed");
+  assert.equal(await persistence.getOperationOutcome(nested), "saved");
   assert.equal(persistence.getStatus().transientWarning, null);
-  assert.equal(fake.calls.setItem.length, 2);
+  assert.equal(fake.calls.setItem.length, 3);
   assert.deepEqual(JSON.parse(fake.values.get(storageKey)).jobs, [job("first", { notes: "Nested" })]);
   assert.deepEqual(persistence.state.getJobs(), [job("first", { notes: "Nested" })]);
-  notifications.show("success", "Jobs saved.");
-  assert.deepEqual(messages, [{ type: "success", message: "Jobs saved." }]);
+  await notifications.show("success", "Jobs saved.", outer);
+  assert.equal(messages[0].type, "error");
 });
 
-test("an explicit wrapper reports a reentrant failure after a successful state mutation", () => {
+test("operation notifications distinguish a reentrant failure from an outer success", async () => {
   const fake = createFakeStorage();
   let persistence;
   let runNested = false;
-  let nestedOutcome;
+  let nested;
   persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
     onStatusChange(status) {
       if (runNested && status.transientWarning === null) {
         runNested = false;
         fake.setError = new Error("nested write failure");
-        persistence.state.updateJob("first", { notes: "Unsaved", updatedAt: timestamp });
-        nestedOutcome = persistence.getMutationSaveOutcome();
+        nested = persistence.state.updateJob("first", { notes: "Unsaved", updatedAt: timestamp });
       }
     }
   });
@@ -1607,98 +1937,88 @@ test("an explicit wrapper reports a reentrant failure after a successful state m
     show: (type, message) => messages.push({ type, message })
   }, persistence);
 
-  persistence.state.createJob(job("first"));
+  await persistence.state.createJob(job("first"));
   fake.setError = new Error("write failure");
-  persistence.state.updateJob("first", { company: "Earlier", updatedAt: timestamp });
+  await assert.rejects(persistence.state.updateJob("first", { company: "Earlier", updatedAt: timestamp }));
   fake.setError = null;
   runNested = true;
-  let mutationOutcome;
-  persistence.runMutation(() => {
-    persistence.state.updateJob("first", { company: "Retry", updatedAt: timestamp });
-    mutationOutcome = persistence.getMutationSaveOutcome();
-  });
+  const outer = persistence.state.updateJob("first", { company: "Retry", updatedAt: timestamp });
+  await outer;
+  await assert.rejects(nested, (error) => error.status === "save-failed");
 
-  assert.equal(mutationOutcome, "saved");
-  assert.equal(nestedOutcome, "write-failed");
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
+  assert.equal(await persistence.getOperationOutcome(outer), "saved");
+  assert.equal(await persistence.getOperationOutcome(nested), "save-failed");
   assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
   assert.equal(fake.calls.setItem.length, 4);
   assert.deepEqual(JSON.parse(fake.values.get(storageKey)).jobs, [job("first", { company: "Retry" })]);
-  assert.deepEqual(persistence.state.getJobs(), [job("first", { company: "Retry", notes: "Unsaved" })]);
-  notifications.show("success", "Jobs saved.");
+  assert.deepEqual(persistence.state.getJobs(), [job("first", { company: "Retry" })]);
+  await notifications.show("success", "Nested saved.", nested);
+  await notifications.show("success", "Outer saved.", outer);
   assert.equal(messages[0].type, "error");
+  assert.equal(messages[1].type, "success");
 });
 
-test("explicit wrapper exceptions propagate and retain the last completed save attempt", () => {
+test("validation exceptions propagate without changing earlier operation outcomes", async () => {
   for (const failingSave of [false, true]) {
     const fake = createFakeStorage();
-    const persistence = createCareerPersistence(fake);
+    const persistence = createCareerPersistence(fake, {
+      locks: { request: (name, options, callback) => callback() }, secureContext: true
+    });
     const messages = [];
     const notifications = createPersistenceNotifications({
       show: (type, message) => messages.push({ type, message })
     }, persistence);
-    let childOutcome;
     fake.setError = failingSave ? new Error("write failure") : null;
 
-    assert.throws(() => persistence.runMutation(() => {
-      persistence.state.createJob(job("first"));
-      childOutcome = persistence.getMutationSaveOutcome();
-      persistence.runMutation(() => persistence.state.updateJob("missing", { company: "Other" }));
-    }), /does not exist/);
+    const first = persistence.state.createJob(job("first"));
+    if (failingSave) await assert.rejects(first, (error) => error.status === "save-failed");
+    else await first;
+    const invalid = persistence.state.updateJob("missing", { company: "Other" });
+    await assert.rejects(invalid, /does not exist/);
 
-    const expected = failingSave ? "write-failed" : "saved";
-    assert.equal(childOutcome, expected);
-    assert.equal(persistence.getMutationSaveOutcome(), expected);
+    assert.equal(await persistence.getOperationOutcome(first), failingSave ? "save-failed" : "saved");
+    assert.equal(await persistence.getOperationOutcome(invalid), "error");
     assert.equal(persistence.getStatus().transientWarning?.kind ?? null, failingSave ? "write-failed" : null);
     assert.equal(fake.calls.setItem.length, 1);
-    assert.deepEqual(persistence.state.getJobs(), [job("first")]);
+    assert.deepEqual(persistence.state.getJobs(), failingSave ? [] : [job("first")]);
     assert.deepEqual(fake.values.has(storageKey) ? JSON.parse(fake.values.get(storageKey)).jobs : [],
       failingSave ? [] : [job("first")]);
-    notifications.show("success", "Jobs saved.");
+    await notifications.show("success", "Jobs saved.", first);
     assert.equal(messages[0].type, failingSave ? "error" : "success");
   }
 
-  const persistence = createCareerPersistence(createFakeStorage());
-  assert.throws(() => persistence.runMutation(() => {
-    throw new Error("operation failed");
-  }), /operation failed/);
-  assert.equal(persistence.getMutationSaveOutcome(), null);
 });
 
-test("a caught nested exception does not prevent a later save from updating the wrapper outcome", () => {
+test("a caught nested exception does not prevent a later successful save", async () => {
   const fake = createFakeStorage();
-  const persistence = createCareerPersistence(fake);
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
   const messages = [];
   const notifications = createPersistenceNotifications({
     show: (type, message) => messages.push({ type, message })
   }, persistence);
-  let failedOutcome;
-  let retryOutcome;
+  fake.setError = new Error("write failure");
+  const failed = persistence.state.createJob(job("first"));
+  await assert.rejects(failed, (error) => error.status === "save-failed");
+  const invalid = persistence.state.updateJob("missing", { company: "Other" });
+  await assert.rejects(invalid, /does not exist/);
+  fake.setError = null;
+  const retry = persistence.state.createJob(job("second"));
+  await retry;
 
-  persistence.runMutation(() => {
-    fake.setError = new Error("write failure");
-    persistence.state.createJob(job("first"));
-    failedOutcome = persistence.getMutationSaveOutcome();
-    assert.throws(() => persistence.runMutation(() => {
-      persistence.state.updateJob("missing", { company: "Other" });
-    }), /does not exist/);
-    fake.setError = null;
-    persistence.state.createJob(job("second"));
-    retryOutcome = persistence.getMutationSaveOutcome();
-  });
-
-  assert.equal(failedOutcome, "write-failed");
-  assert.equal(retryOutcome, "saved");
-  assert.equal(persistence.getMutationSaveOutcome(), "saved");
+  assert.equal(await persistence.getOperationOutcome(failed), "save-failed");
+  assert.equal(await persistence.getOperationOutcome(invalid), "error");
+  assert.equal(await persistence.getOperationOutcome(retry), "saved");
   assert.equal(persistence.getStatus().transientWarning, null);
   assert.equal(fake.calls.setItem.length, 2);
-  assert.deepEqual(persistence.state.getJobs(), [job("first"), job("second")]);
-  assert.deepEqual(JSON.parse(fake.values.get(storageKey)).jobs, [job("first"), job("second")]);
-  notifications.show("success", "Jobs saved.");
+  assert.deepEqual(persistence.state.getJobs(), [job("second")]);
+  assert.deepEqual(JSON.parse(fake.values.get(storageKey)).jobs, [job("second")]);
+  await notifications.show("success", "Jobs saved.", retry);
   assert.equal(messages[0].type, "success");
 });
 
-test("unchanged mutations preserve persistent and transient warnings", () => {
+test("blocked mutations preserve persistent and transient warnings", async () => {
   const fake = createFakeStorage("not JSON");
   const persistence = createCareerPersistence(fake);
   const state = persistence.state;
@@ -1707,27 +2027,34 @@ test("unchanged mutations preserve persistent and transient warnings", () => {
     show: (type, message) => messages.push({ type, message })
   }, persistence);
 
-  state.createJob(job());
-  notifications.show("success", "Job created.");
+  const first = state.createJob(job());
+  await assert.rejects(first, (error) => error.status === "writes-disabled");
+  await notifications.show("success", "Job created.", first);
   assert.equal(messages[0].type, "error");
   const warnings = persistence.getStatus();
   assert.equal(warnings.persistentWarning.kind, "corrupt");
   assert.equal(warnings.transientWarning.kind, "write-disabled");
 
-  state.updateJob("job-1", { company: "Example Company" });
-  assert.equal(persistence.getMutationSaveOutcome(), "unchanged");
-  notifications.show("success", "Job updated.");
-  assert.equal(messages.length, 1);
+  const second = state.updateJob("job-1", { company: "Example Company" });
+  await assert.rejects(second, (error) => error.status === "writes-disabled");
+  assert.equal(await persistence.getOperationOutcome(second), "writes-disabled");
+  await notifications.show("success", "Job updated.", second);
+  assert.equal(messages.length, 2);
+  assert.equal(messages[1].type, "error");
   assert.deepEqual(persistence.getStatus(), warnings);
   assert.equal(fake.values.get(storageKey), "not JSON");
+  assert.deepEqual(state.getJobs(), []);
 });
 
-test("public snapshot restoration persists once while initialization does not save", () => {
+test("public snapshot restoration persists once while initialization does not save", async () => {
   const data = migratedV4(snapshot());
   const fake = createFakeStorage();
-  const persistence = createCareerPersistence(fake);
-  persistence.state.restoreSnapshot(data);
-  assert.equal(persistence.getMutationSaveOutcome(), "saved");
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
+  const operation = persistence.state.restoreSnapshot(data);
+  await operation;
+  assert.equal(await persistence.getOperationOutcome(operation), "saved");
   assert.equal(fake.calls.setItem.length, 1);
   assert.deepEqual(persistence.state.getSnapshot(), data);
 
@@ -1735,150 +2062,199 @@ test("public snapshot restoration persists once while initialization does not sa
   const loaded = createCareerPersistence(loadedStorage);
   assert.deepEqual(loaded.state.getSnapshot(), data);
   assert.equal(loadedStorage.calls.setItem.length, 0);
-  assert.equal(loaded.getMutationSaveOutcome(), null);
 });
 
-test("public restoration respects protected storage and leaves the original bytes intact", () => {
+test("public restoration respects protected storage and leaves the original bytes intact", async () => {
   const raw = "not JSON";
   const fake = createFakeStorage(raw);
   const persistence = createCareerPersistence(fake);
   const data = migratedV4(snapshot());
-  persistence.state.restoreSnapshot(data);
+  const before = persistence.state.getSnapshot();
+  const operation = persistence.state.restoreSnapshot(data);
+  await assert.rejects(operation, (error) => error.status === "writes-disabled");
 
-  assert.deepEqual(persistence.state.getSnapshot(), data);
-  assert.equal(persistence.getMutationSaveOutcome(), "writes-disabled");
+  assert.deepEqual(persistence.state.getSnapshot(), before);
+  assert.equal(await persistence.getOperationOutcome(operation), "writes-disabled");
   assert.equal(persistence.getStatus().persistentWarning.kind, "corrupt");
   assert.equal(persistence.getStatus().transientWarning.kind, "write-disabled");
   assert.equal(fake.values.get(storageKey), raw);
   assert.equal(fake.calls.setItem.length, 0);
 });
 
-test("adapter construction failures and unexpected save errors cannot emit success", () => {
+test("adapter construction failures and unexpected save errors cannot emit success", async () => {
   for (const dependencies of [
     { createStorage: () => { throw new Error("storage unavailable"); } },
     { createStorage: () => ({
       load: () => ({ status: "missing" }),
-      save: () => { throw new Error("unexpected save error"); }
+      createWriter: (options) => createSnapshotWriter({
+        ...options,
+        storage: {
+          load: () => ({ status: "missing", snapshot: options.initialSnapshot, snapshotRevision: 0, careerRevision: 0 }),
+          save: () => { throw new Error("unexpected save error"); }
+        }
+      })
     }) }
   ]) {
-    const persistence = createWithDependencies(null, dependencies, { onUnexpectedError: () => {} });
+    const errors = [];
+    const persistence = createWithDependencies(null, dependencies, {
+      locks: { request: (name, options, callback) => callback() }, secureContext: true,
+      onUnexpectedError: (error) => errors.push(error.message)
+    });
     const state = createPersistenceMutationState(persistence);
     const messages = [];
     const notifications = createPersistenceNotifications({
       show: (type, message) => messages.push({ type, message })
     }, persistence);
-    state.createProfile({ fullName: "Profile", headline: "", summary: "", skills: [] }, {
+    const operation = state.createProfile({ fullName: "Profile", headline: "", summary: "", skills: [] }, {
       id: "profile", createdAt: timestamp
     });
-    notifications.show("success", "Profile created.");
-    assert.equal(state.getProfile().fullName, "Profile");
+    await assert.rejects(operation);
+    await notifications.show("success", "Profile created.", operation);
+    assert.equal(state.getProfile(), null);
     assert.equal(messages[0].type, "error");
-    assert.notEqual(persistence.getMutationSaveOutcome(), "saved");
+    assert.notEqual(await persistence.getOperationOutcome(operation), "saved");
+    assert.equal(errors.length, 1);
   }
 });
 
-test("the application mutation wrapper tracks each supported mutation method", () => {
+test("the application mutation wrapper tracks each supported mutation method", async () => {
   const methods = [
     "createProfile", "updateProfile", "addEmploymentRecord", "updateEmploymentRecord",
     "deleteEmploymentRecord", "addAchievementRecord", "updateAchievementRecord",
     "updateAchievementVerificationStatus", "deleteAchievementRecord", "createJob",
     "updateJob", "archiveJob", "reactivateJob", "deleteJob", "createRequirement",
     "updateRequirement", "deleteRequirement", "createAchievementMapping", "deleteAchievementMapping",
-    "restoreSnapshot"
+    "createImportSession", "transitionImportSession", "retryImportSession", "addImportCandidates",
+    "setImportCategory", "updateImportCandidate", "decideImportCandidate"
   ];
-  let runs = 0;
-  const persistence = {
-    state: Object.fromEntries(methods.map((method) => [method, (arg) => `${method}:${arg}`])),
-    runMutation(operation) {
-      runs += 1;
-      return operation();
-    }
-  };
-  const state = createPersistenceMutationState(persistence);
-  for (const method of methods) {
-    assert.equal(state[method]("argument"), `${method}:argument`);
-  }
-  assert.equal(runs, methods.length);
-});
-
-test("successful saves do not clear unrelated persistent warnings", () => {
-  const persistence = createWithDependencies(createFakeStorage(), {
-    createStorage: () => ({
-      load: () => ({ status: "corrupt" }),
-      save: () => ({ status: "saved" })
-    })
-  });
-  persistence.runMutation(() => persistence.state.createProfile({
-    fullName: "Profile", headline: "", summary: "", skills: []
-  }, { id: "profile", createdAt: timestamp }));
-  assert.equal(persistence.getMutationSaveOutcome(), "saved");
-  assert.equal(persistence.getStatus().persistentWarning.kind, "corrupt");
-});
-
-test("snapshot accessor and save exceptions are contained and observable", () => {
-  const errors = [];
-  const accessorThrow = createWithDependencies(null, {
-    createStorage: () => ({
-      load: () => ({ status: "missing" }),
-      save: () => ({ status: "saved" })
-    }),
-    createState: ({ onMutation }) => {
-      const state = {
-        createProfile() {
-          onMutation(() => {
-            throw new Error("snapshot accessor failure");
-          });
+  const fake = createFakeStorage();
+  const persistence = createWithDependencies(fake, {
+    createState() {
+      const state = createCareerState();
+      return new Proxy(state, {
+        get(target, property) {
+          if (methods.includes(property)) return () => target.createJob(job(property));
+          return target[property];
         }
-      };
-      return state;
+      });
     }
-  }, { onUnexpectedError: (error) => errors.push(error) });
-  accessorThrow.state.createProfile();
+  }, { locks: { request: (name, options, callback) => callback() }, secureContext: true });
+  const state = createPersistenceMutationState(persistence);
+  const emptySnapshot = state.getSnapshot();
+  for (const method of methods) {
+    const operation = state[method]("argument");
+    assert.equal((await operation).id, method);
+    assert.equal(await persistence.getOperationOutcome(operation), "saved");
+  }
+  assert.equal(fake.calls.setItem.length, methods.length);
+  const replacement = state.restoreSnapshot(emptySnapshot);
+  await replacement;
+  assert.equal(await persistence.getOperationOutcome(replacement), "saved");
+  assert.equal(fake.calls.setItem.length, methods.length + 1);
+  assert.deepEqual(state.getSnapshot(), emptySnapshot);
+});
+
+test("persistent storage warnings cannot be cleared by a blocked write", async () => {
+  const fake = createFakeStorage("not JSON");
+  const persistence = createCareerPersistence(fake);
+  const operation = persistence.state.createProfile({
+    fullName: "Profile", headline: "", summary: "", skills: []
+  }, { id: "profile", createdAt: timestamp });
+  await assert.rejects(operation, (error) => error.status === "writes-disabled");
+  assert.equal(await persistence.getOperationOutcome(operation), "writes-disabled");
+  assert.equal(persistence.getStatus().persistentWarning.kind, "corrupt");
+  assert.equal(fake.values.get(storageKey), "not JSON");
+  assert.deepEqual(fake.calls.setItem, []);
+  assert.equal(persistence.state.getProfile(), null);
+});
+
+test("snapshot accessor and save exceptions are contained and observable", async () => {
+  const errors = [];
+  const fake = createFakeStorage();
+  const accessorThrow = createWithDependencies(fake, {
+    createState: () => {
+      const state = createCareerState();
+      let changed = false;
+      return new Proxy(state, {
+        get(target, property) {
+          if (property === "createProfile") return (...args) => {
+            const result = target.createProfile(...args);
+            changed = true;
+            return result;
+          };
+          if (property === "getSnapshot") return () => {
+            if (changed) throw new Error("snapshot accessor failure");
+            return target.getSnapshot();
+          };
+          return target[property];
+        }
+      });
+    }
+  }, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true,
+    onUnexpectedError: (error) => errors.push(error)
+  });
+  const input = { fullName: "Profile", headline: "", summary: "", skills: [] };
+  await assert.rejects(accessorThrow.state.createProfile(input, { id: "profile-1", createdAt: timestamp }),
+    /snapshot accessor failure/);
   assert.equal(accessorThrow.getStatus().transientWarning.kind, "unexpected-error");
   assert.match(errors[0].message, /snapshot accessor failure/);
+  assert.equal(accessorThrow.state.getProfile(), null);
+  assert.deepEqual(fake.calls.setItem, []);
 
   const saveThrow = createWithDependencies(null, {
     createStorage: () => ({
       load: () => ({ status: "missing" }),
-      save() {
-        throw new Error("save failure");
-      }
+      createWriter: (options) => createSnapshotWriter({
+        ...options,
+        storage: {
+          load: () => ({ status: "missing", snapshot: options.initialSnapshot, snapshotRevision: 0, careerRevision: 0 }),
+          save: () => { throw new Error("save failure"); }
+        }
+      })
     })
-  }, { onUnexpectedError: (error) => errors.push(error) });
-  saveThrow.state.createProfile({
-    fullName: "Profile",
-    headline: "",
-    summary: "",
-    skills: []
-  }, { id: "profile-1", createdAt: timestamp });
+  }, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true,
+    onUnexpectedError: (error) => errors.push(error)
+  });
+  await assert.rejects(saveThrow.state.createProfile(input, { id: "profile-1", createdAt: timestamp }),
+    (error) => error.status === "save-failed" && error.cause === "unexpected-error");
   assert.equal(saveThrow.getStatus().transientWarning.kind, "unexpected-error");
   assert.match(errors.at(-1).message, /save failure/);
+  assert.equal(saveThrow.state.getProfile(), null);
 });
 
-test("onStatusChange exceptions do not break mutations", () => {
+test("onStatusChange exceptions do not break mutations", async () => {
   const fake = createFakeStorage();
   fake.setError = new Error("write failure");
   const errors = [];
   const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true,
     onStatusChange() {
       throw new Error("status listener failure");
     },
     onUnexpectedError: (error) => errors.push(error)
   });
 
-  const created = persistence.state.createProfile({
+  const input = {
     fullName: "Profile",
     headline: "",
     summary: "",
     skills: []
-  }, { id: "profile-1", createdAt: timestamp });
+  };
+  await assert.rejects(persistence.state.createProfile(input, { id: "profile-1", createdAt: timestamp }),
+    (error) => error.status === "save-failed");
+  assert.equal(persistence.state.getProfile(), null);
+  assert.equal(fake.values.has(storageKey), false);
+  fake.setError = null;
+  const created = await persistence.state.createProfile(input, { id: "profile-1", createdAt: timestamp });
 
   assert.equal(created.id, "profile-1");
   assert.equal(persistence.state.getProfile().id, "profile-1");
   assert.ok(errors.some((error) => /status listener failure/.test(error.message)));
 });
 
-test("onUnexpectedError exceptions use console.error fallback and do not escape", () => {
+test("onUnexpectedError exceptions use console.error fallback and do not escape", async () => {
   const errors = [];
   const originalError = console.error;
   console.error = (...args) => errors.push(args);
@@ -1893,13 +2269,13 @@ test("onUnexpectedError exceptions use console.error fallback and do not escape"
       }
     });
 
-    persistence.state.createProfile({
+    await assert.rejects(persistence.state.createProfile({
       fullName: "Profile",
       headline: "",
       summary: "",
       skills: []
-    }, { id: "profile-1", createdAt: timestamp });
-    assert.equal(persistence.state.getProfile().id, "profile-1");
+    }, { id: "profile-1", createdAt: timestamp }), (error) => error.status === "writes-disabled");
+    assert.equal(persistence.state.getProfile(), null);
     assert.ok(errors.length > 0);
     assert.ok(errors.some(([message]) => /error handler failed/.test(message)));
   } finally {
@@ -1907,61 +2283,62 @@ test("onUnexpectedError exceptions use console.error fallback and do not escape"
   }
 });
 
-test("status objects are detached and unchanged statuses are not re-emitted", () => {
+test("status objects are detached and unchanged statuses are not re-emitted", async () => {
   const fake = createFakeStorage();
   fake.setError = new Error("write failure");
   const notifications = [];
   const persistence = createCareerPersistence(fake, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true,
     onStatusChange(status) {
       notifications.push(status);
       status.transientWarning.message = "mutated by listener";
     }
   });
-  persistence.state.createProfile({
+  const input = {
     fullName: "Profile",
     headline: "",
     summary: "",
     skills: []
-  }, { id: "profile-1", createdAt: timestamp });
-  persistence.state.updateProfile({
-    fullName: "Updated",
-    headline: "",
-    summary: "",
-    skills: []
-  }, timestamp);
+  };
+  await assert.rejects(persistence.state.createProfile(input, { id: "profile-1", createdAt: timestamp }));
+  await assert.rejects(persistence.state.createProfile(input, { id: "profile-1", createdAt: timestamp }));
 
   assert.equal(notifications.length, 1);
   assert.equal(persistence.getStatus().transientWarning.message,
-    "This change is available in this session but could not be saved.");
+    "The change could not be saved (save-failed).");
   const detached = persistence.getStatus();
   detached.transientWarning.message = "external mutation";
   assert.notEqual(persistence.getStatus().transientWarning.message, "external mutation");
+  assert.equal(persistence.state.getProfile(), null);
+  assert.equal(fake.values.has(storageKey), false);
 });
 
-test("each mutation invokes the snapshot accessor exactly once", () => {
+test("each mutation invokes the staged snapshot accessor exactly once", async () => {
   let calls = 0;
-  const persistence = createWithDependencies(null, {
-    createStorage: () => ({
-      load: () => ({ status: "missing" }),
-      save: () => ({ status: "saved" })
-    }),
-    createState: ({ onMutation }) => ({
-      mutate() {
-        onMutation(() => {
-          calls += 1;
-          return {
-            profile: null,
-            employmentRecords: [],
-            achievementRecords: [],
-            jobs: [],
-            requirements: [],
-            achievementMappings: []
+  const fake = createFakeStorage();
+  const persistence = createWithDependencies(fake, {
+    createState: () => {
+      const state = createCareerState();
+      let stagedMutation = false;
+      return new Proxy(state, {
+        get(target, property) {
+          if (property === "createJob") return (...args) => {
+            const result = target.createJob(...args);
+            stagedMutation = true;
+            return result;
           };
-        });
-      }
-    })
-  });
+          if (property === "getSnapshot") return () => {
+            if (stagedMutation) calls += 1;
+            return target.getSnapshot();
+          };
+          return target[property];
+        }
+      });
+    }
+  }, { locks: { request: (name, options, callback) => callback() }, secureContext: true });
 
-  persistence.state.mutate();
+  await persistence.state.createJob(job());
   assert.equal(calls, 1);
+  assert.equal(fake.calls.setItem.length, 1);
+  assert.deepEqual(JSON.parse(fake.values.get(storageKey)).jobs, [job()]);
 });

@@ -12,6 +12,26 @@ import { createRequirementRecord } from "../src/js/requirement-model.js";
 const createdAt = "2025-04-20T14:30:00.000Z";
 const updatedAt = "2025-05-01T09:15:00.000Z";
 
+async function writeSnapshot(storage, snapshot) {
+  const initial = storage.load();
+  const writer = storage.createWriter({
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
+    initialSnapshot: initial.snapshot,
+    initialSnapshotRevision: initial.snapshotRevision,
+    initialCareerRevision: initial.careerRevision,
+    copySnapshot: structuredClone,
+    careerData: (value) => ({
+      profile: value.profile,
+      employmentRecords: value.employmentRecords,
+      achievementRecords: value.achievementRecords,
+      educationRecords: value.educationRecords,
+      certificationRecords: value.certificationRecords
+    })
+  });
+  return writer.write(initial.snapshotRevision, () => ({ snapshot, forceWrite: true }));
+}
+
 function profileInput(overrides = {}) {
   return {
     fullName: "Career profile name",
@@ -224,7 +244,7 @@ test("v4 snapshots round trip opaque collections, precision, and provenance with
   assert.deepEqual(afterMutation.profile.provenance, expected.profile.provenance);
 });
 
-test("v4 state snapshots save and load through the storage contract", () => {
+test("v4 state snapshots save and load through the storage contract", async () => {
   let stored = null;
   const storage = createCareerStorage({
     getItem: () => stored,
@@ -246,7 +266,7 @@ test("v4 state snapshots save and load through the storage contract", () => {
     }
   });
   source.restoreSnapshot(snapshot);
-  assert.equal(storage.save(source.getSnapshot()).status, "saved");
+  assert.equal((await writeSnapshot(storage, source.getSnapshot())).status, "saved");
 
   const loaded = storage.load();
   assert.equal(loaded.status, "loaded");
@@ -254,7 +274,7 @@ test("v4 state snapshots save and load through the storage contract", () => {
   restored.restoreSnapshot(loaded.snapshot);
   assert.deepEqual(restored.getSnapshot(), snapshot);
   restored.updateProfile(profileInput({ fullName: "Updated" }), updatedAt);
-  assert.equal(storage.save(restored.getSnapshot()).status, "saved");
+  assert.equal((await writeSnapshot(storage, restored.getSnapshot())).status, "saved");
   const reloaded = storage.load();
   assert.equal(reloaded.status, "loaded");
   assert.deepEqual(reloaded.snapshot.import, snapshot.import);
@@ -262,7 +282,7 @@ test("v4 state snapshots save and load through the storage contract", () => {
   assert.deepEqual(reloaded.snapshot.certificationRecords, snapshot.certificationRecords);
 });
 
-test("v4 missing, null and array provenance loads and survives ordinary updates", () => {
+test("v4 missing, null and array provenance loads and survives ordinary updates", async () => {
   for (const provenance of [undefined, null, [], [provenanceItem()]]) {
     const snapshot = completeSnapshot();
     for (const record of [snapshot.profile, snapshot.employmentRecords[0], snapshot.achievementRecords[0]]) {
@@ -296,7 +316,8 @@ test("v4 missing, null and array provenance loads and survives ordinary updates"
         assert.deepEqual(record.provenance, provenance);
       }
     }
-    assert.equal(storage.save(output).status, "saved");
+    assert.equal((await writeSnapshot(storage, output)).status, "saved");
+    assert.deepEqual(storage.load().snapshot, output);
     const replacement = [provenanceItem("replacement")];
     state.updateProfile(profileInput({ provenance: replacement }), updatedAt);
     state.updateEmploymentRecord("employment-1", employmentInput({ provenance: replacement }), updatedAt);
@@ -349,7 +370,7 @@ test("lossy values are rejected before restore or CRUD mutation", () => {
   assert.deepEqual(state.getSnapshot(), emptySnapshot());
 });
 
-test("unknown Employment start dates round trip without invented chronology", () => {
+test("unknown Employment start dates round trip without invented chronology", async () => {
   const state = createCareerState();
   addEmployment(state, "employment-1", employmentInput({
     startDate: null,
@@ -361,7 +382,7 @@ test("unknown Employment start dates round trip without invented chronology", ()
     getItem: () => raw,
     setItem: (key, value) => { raw = value; }
   });
-  assert.equal(storage.save(state.getSnapshot()).status, "saved");
+  assert.equal((await writeSnapshot(storage, state.getSnapshot())).status, "saved");
   const restored = createCareerState();
   restored.restoreSnapshot(storage.load().snapshot);
   assert.deepEqual(restored.getEmploymentRecords()[0].startDate, null);
@@ -644,7 +665,7 @@ test("snapshot copies isolate every collection and nested supported value", () =
   assert.equal(state.getEmploymentRecords().length, 1);
 });
 
-test("shared opaque and legacy values are independently validated and copied", () => {
+test("shared opaque and legacy values are independently validated and copied", async () => {
   const nested = { details: [1, { excerpt: "source" }] };
   const shared = { nested };
   const input = completeSnapshot({
@@ -660,7 +681,7 @@ test("shared opaque and legacy values are independently validated and copied", (
   assert.deepEqual(output.legacyRequirements[0], output.educationRecords[0]);
   let raw = null;
   const storage = createCareerStorage({ getItem: () => raw, setItem: (key, value) => { raw = value; } });
-  assert.equal(storage.save(output).status, "saved");
+  assert.equal((await writeSnapshot(storage, output)).status, "saved");
   assert.deepEqual(storage.load().snapshot, output);
   const fresh = createCareerState();
   const before = fresh.getSnapshot();

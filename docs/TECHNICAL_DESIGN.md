@@ -755,10 +755,7 @@ design:
   specified.
 - Canonical serialization/hash for `payloadIdentity`.
 - Idempotency-key retention duration and collision handling.
-- Revision increments for ordinary state mutations and import operations.
-- The mechanism for enforcing a single-tab writer, including behavior when
-  coordination APIs are unavailable. Detection alone does not provide
-  cross-tab atomicity.
+- CV-007's use of the approved revision and writer contracts in Section 16.7.
 - Backend authentication before any remote or public hosting. Hosting is
   outside the initial MVP.
 - Operational response if temporary original-CV deletion fails.
@@ -1118,10 +1115,44 @@ are protected without overwriting the original value.
 
 ### 16.7 Atomic import transaction, revisions, and idempotency
 
+CV-018's approved target uses two persisted, non-negative safe-integer
+counters in the version-5 envelope: `snapshotRevision` and `careerRevision`.
+Migration from versions 1 through 4 initializes both to zero without dropping
+existing data. Each successful snapshot write advances `snapshotRevision`
+once; a no-op does not write or advance it. `careerRevision` advances once
+only when committed Profile, Employment, Achievement, Education, or
+Certification records change. Import-session, approval-receipt, report,
+Job, Requirement, and mapping changes do not by themselves advance
+`careerRevision`; a mutation that also changes a career record does.
+Approvals will bind to `careerRevision`, while stale-writer checks use
+`snapshotRevision`. A migration-only write advances `snapshotRevision` but
+not `careerRevision`. Counter overflow must fail closed.
+
+The persistence implementation stages changes on detached state without
+notifying observers; under the
+shared exclusive Web Lock it reloads and checks the latest snapshot, prepares
+and validates the replacement, writes it once, and only then publishes.
+Failed saves, stale snapshots, and unavailable coordination must not publish
+or persist partial changes. The lock coordinates participating same-origin
+writers only. A secure context and Web Locks are required; there is no
+unlocked write fallback. The supported browser matrix remains for CV-017.
+
+For the in-progress persistence API, each mutation returns a promise that
+identifies that specific operation. A success notification must pass that
+same promise as the third argument to `notifications.show` and await the
+notification; it appears only after that operation saves, is suppressed for
+a no-op, and reports an error for a failed or unknown operation. Callers must
+also handle mutation rejections. This avoids attributing another concurrent or
+reentrant operation's outcome to the notification. UI mutation handlers await
+the operation before closing dialogs, rerendering, navigating, or announcing
+success. While a mutation is pending, user interactions that could change or
+resubmit the operation are blocked; failures retain the dialog and its inputs.
+
 The proposed, not-yet-implemented transaction sequence is `prepare ->
 validate -> persist -> publish`. Its atomic import guarantee depends on
-enforcing the single-tab writer constraint across all writers. If safe writer
-coordination cannot be established, the import commit must fail closed.
+all same-origin application writers participating in the shared lock. If
+safe writer coordination cannot be established, the import commit must fail
+closed.
 
 The conceptual API is:
 
@@ -1163,9 +1194,9 @@ excerpts. Exact canonical payload serialization/hash and marker retention
 remain open.
 
 Stale revisions or changed/deleted merge targets block commit and require
-renewed review. Revision checks require a defined revision source and
-enforced writer constraint; a check followed by `setItem()` is not cross-tab
-atomic. Exact revision increments are open.
+renewed review. Revision checks require the revision source and enforced
+writer constraint above; a check followed by `setItem()` alone is not
+cross-tab atomic.
 
 ### 16.8 Single-tab concurrency and external changes
 
@@ -1180,13 +1211,11 @@ on stale data. It must not claim that `localStorage` provides cross-tab
 atomicity: a read/revision check followed by `setItem()` is not compare-and-
 swap, and an asynchronous storage event cannot prevent another tab's write.
 
-The mechanism for enforcing the single-tab writer constraint, including
-behavior when a coordination API is unavailable, remains open. If the
-constraint cannot be enforced safely, commit must fail closed rather than
-silently overwrite a newer snapshot. This limitation also applies to ordinary
-state writers; a transaction-only lock would not protect against a normal
-mutation in another tab. The proposed import transaction guarantee depends on
-enforcing this constraint across all writers, not on revision checks alone.
+The approved CV-018 target uses the shared lock described in Section 16.7.
+Until it is implemented across ordinary state writers, a transaction-only lock
+would not protect against a normal mutation in another tab. The proposed import
+transaction guarantee depends on enforcing the constraint across all writers,
+not on revision checks alone.
 
 ### 16.9 Backend files, expiry, failure, and recovery
 

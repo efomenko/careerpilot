@@ -7,6 +7,7 @@ import {
 import { createDialogManager } from "./dialogs.js";
 import { createNavigationController } from "./navigation.js";
 import { createNotifications } from "./notifications.js";
+import { createUiMutationRunner } from "./ui-mutation.js";
 import { createJobRecord } from "./job-model.js";
 import { createRequirementRecord } from "./requirement-model.js";
 import { createAchievementMappingRecord } from "./achievement-mapping-model.js";
@@ -44,6 +45,22 @@ function logPersistenceError(error) {
   }
 }
 
+function mutationErrorMessage(error, fallback) {
+  if (error.status === "stale") {
+    return "Data changed in another tab. Copy your edits, then reload before retrying.";
+  }
+  if (error.status === "coordination-unavailable") {
+    return "Saving requires a secure context and Web Locks. Your changes were not saved.";
+  }
+  if (error.status === "coordination-failed") {
+    return "The saving lock could not be acquired. Please retry.";
+  }
+  if (error.status === "save-failed") {
+    return "Saving failed. Check storage availability and retry.";
+  }
+  return error.message || fallback;
+}
+
 const browserStorage = {
   getItem(key) {
     return globalThis.localStorage.getItem(key);
@@ -64,6 +81,13 @@ const notificationRegion = createNotifications({
   region: document.querySelector("#ordinary-notification")
 });
 const notifications = createPersistenceNotifications(notificationRegion, careerPersistence);
+const mutationHandler = createUiMutationRunner({
+  document,
+  onUnexpectedError(error) {
+    logPersistenceError(error);
+    notificationRegion.show("error", "The operation could not be completed.");
+  }
+});
 const dialogManager = createDialogManager({
   discardDialog: document.querySelector("#discard-confirmation"),
   continueEditingButton: document.querySelector("#continue-editing"),
@@ -393,7 +417,8 @@ const navigation = createNavigationController({
   window,
   dialogManager,
   views,
-  navigateTo
+  navigateTo,
+  isNavigationBlocked: mutationHandler.isPending
 });
 
 function openDialogWithNavigation(dialog, options) {
@@ -669,7 +694,7 @@ function createRecordId() {
   }
 }
 
-function saveProfile(event) {
+async function saveProfile(event) {
   event.preventDefault();
   clearProfileFieldErrors();
 
@@ -690,26 +715,28 @@ function saveProfile(event) {
   const existingProfile = careerState.getProfile();
 
   try {
-    const profile = existingProfile
+    const operation = existingProfile
       ? careerState.updateProfile(input, new Date().toISOString())
       : careerState.createProfile(input, {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       });
+    const profile = await operation;
 
     dialogManager.closeAfterMutation();
     populateProfileForm(profile);
     renderProfile(profile);
-    notifications.show(
+    await notifications.show(
       "success",
-      existingProfile ? "Profile updated." : "Profile created."
+      existingProfile ? "Profile updated." : "Profile created.",
+      operation
     );
   } catch (error) {
     if (Array.isArray(error.errors)) {
       showProfileValidationErrors(error.errors);
     }
 
-    const message = error.message || "The profile could not be saved.";
+    const message = mutationErrorMessage(error, "The profile could not be saved.");
     notifications.show("error", message);
   }
 }
@@ -1020,7 +1047,7 @@ function renderAchievementMappingResults() {
       context.textContent = record.context || "No context provided.";
 
       button.append(title, context);
-      button.addEventListener("click", () => createRequirementAchievementMapping(record));
+      button.addEventListener("click", mutationHandler(() => createRequirementAchievementMapping(record)));
       item.append(button);
       list.append(item);
     });
@@ -1057,12 +1084,13 @@ function openAchievementMappingSelector({ invoker, jobId, requirement }) {
   }
 }
 
-function createRequirementAchievementMapping(achievement) {
+async function createRequirementAchievementMapping(achievement) {
   const selection = activeAchievementMappingSelection;
   if (!selection || !achievementMappingSelectorDialog.open) {
     return;
   }
 
+  let operation;
   try {
     const createdAt = new Date().toISOString();
     const mapping = createAchievementMappingRecord({
@@ -1072,11 +1100,12 @@ function createRequirementAchievementMapping(achievement) {
       id: createRecordId(),
       createdAt
     });
-    careerState.createAchievementMapping(mapping);
+    operation = careerState.createAchievementMapping(mapping);
+    await operation;
   } catch (error) {
     notifications.show(
       "error",
-      error.message || "The Achievement could not be mapped to this Requirement."
+      mutationErrorMessage(error, "The Achievement could not be mapped to this Requirement.")
     );
     return;
   }
@@ -1086,7 +1115,7 @@ function createRequirementAchievementMapping(achievement) {
   activeAchievementMappingSelection = null;
   renderJobRequirements(jobId);
   focusRequirementAction(requirementId, "open-achievement");
-  notifications.show("success", "Achievement mapped to Requirement.");
+  await notifications.show("success", "Achievement mapped to Requirement.", operation);
 }
 
 function goToAchievementsFromMappingSelector() {
@@ -1127,13 +1156,15 @@ function openAchievementFromRequirement(achievementId) {
   achievementCard.scrollIntoView({ block: "center" });
 }
 
-function unmapAchievementFromRequirement(mappingId, requirementId, jobId) {
+async function unmapAchievementFromRequirement(mappingId, requirementId, jobId) {
+  let operation;
   try {
-    careerState.deleteAchievementMapping(mappingId);
+    operation = careerState.deleteAchievementMapping(mappingId);
+    await operation;
   } catch (error) {
     notifications.show(
       "error",
-      error.message || "The Achievement could not be unmapped."
+      mutationErrorMessage(error, "The Achievement could not be unmapped.")
     );
     return;
   }
@@ -1146,7 +1177,7 @@ function unmapAchievementFromRequirement(mappingId, requirementId, jobId) {
     focusRequirementAction(requirementId, "unmap-achievement")
       || focusRequirementAction(requirementId, "edit");
   }
-  notifications.show("success", "Achievement unmapped from Requirement.");
+  await notifications.show("success", "Achievement unmapped from Requirement.", operation);
 }
 
 function renderAchievementEvidenceGroup(requirementId, jobId, label, group) {
@@ -1202,9 +1233,9 @@ function renderAchievementEvidenceGroup(requirementId, jobId, label, group) {
       "aria-label",
       `Unmap ${achievement.title} from this Requirement`
     );
-    unmapButton.addEventListener("click", () =>
+    unmapButton.addEventListener("click", mutationHandler(() =>
       unmapAchievementFromRequirement(mapping.id, requirementId, jobId)
-    );
+    ));
 
     actions.append(openButton, unmapButton);
     item.append(title, context, actions);
@@ -1556,7 +1587,7 @@ function readRequirementForm() {
   };
 }
 
-function saveRequirement(event) {
+async function saveRequirement(event) {
   event.preventDefault();
   clearRequirementFieldErrors();
 
@@ -1609,7 +1640,7 @@ function saveRequirement(event) {
   }
 
   try {
-    const savedRecord = existingRecord
+    const operation = existingRecord
       ? careerState.updateRequirement(existingRecord.id, {
         ...input,
         updatedAt: new Date().toISOString()
@@ -1621,6 +1652,7 @@ function saveRequirement(event) {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       }));
+    const savedRecord = await operation;
 
     dialogManager.closeAfterMutation();
     resetRequirementForm();
@@ -1631,16 +1663,16 @@ function saveRequirement(event) {
       renderJobRequirements(jobId);
       focusRequirementAction(savedRecord.id);
     }
-    notifications.show("success", existingRecord
+    await notifications.show("success", existingRecord
       ? "Requirement updated."
-      : "Requirement added.");
+      : "Requirement added.", operation);
   } catch (error) {
     if (Array.isArray(error.errors)) {
       showRequirementValidationErrors(error.errors);
     }
     notifications.show(
       "error",
-      error.message || "The Requirement could not be saved."
+      mutationErrorMessage(error, "The Requirement could not be saved.")
     );
   }
 }
@@ -1683,7 +1715,7 @@ function openRequirementDeleteDialog(record, invoker) {
   }
 }
 
-function confirmRequirementDeletion() {
+async function confirmRequirementDeletion() {
   const pendingDeletion = pendingRequirementDeletion;
   if (
     !pendingDeletion
@@ -1694,13 +1726,15 @@ function confirmRequirementDeletion() {
   }
 
   isDeletingRequirement = true;
+  let operation;
   try {
-    careerState.deleteRequirement(pendingDeletion.id);
+    operation = careerState.deleteRequirement(pendingDeletion.id);
+    await operation;
   } catch (error) {
     isDeletingRequirement = false;
     notifications.show(
       "error",
-      error.message || "The Requirement could not be deleted."
+      mutationErrorMessage(error, "The Requirement could not be deleted.")
     );
     return;
   }
@@ -1717,7 +1751,7 @@ function confirmRequirementDeletion() {
       focusRequirementAction(pendingDeletion.previousId);
     }
   }
-  notifications.show("success", "Requirement deleted.");
+  await notifications.show("success", "Requirement deleted.", operation);
 }
 
 function renderJobDetail(record, { refreshAssessment = true } = {}) {
@@ -1771,7 +1805,7 @@ function returnToJobList() {
   document.querySelector("#jobs-title").focus();
 }
 
-function changeSelectedJobStatus() {
+async function changeSelectedJobStatus() {
   const jobId = jobDetailPanel.dataset.jobId;
   const record = careerState.getJobs().find((item) => item.id === jobId);
 
@@ -1782,21 +1816,21 @@ function changeSelectedJobStatus() {
   }
 
   try {
-    if (record.status === "archived") {
-      careerState.reactivateJob(record.id, new Date().toISOString());
-    } else {
-      careerState.archiveJob(record.id, new Date().toISOString());
-    }
+    const operation = record.status === "archived"
+      ? careerState.reactivateJob(record.id, new Date().toISOString())
+      : careerState.archiveJob(record.id, new Date().toISOString());
+    await operation;
 
     returnToJobList();
-    notifications.show(
+    await notifications.show(
       "success",
-      record.status === "archived" ? "Job reactivated." : "Job archived."
+      record.status === "archived" ? "Job reactivated." : "Job archived.",
+      operation
     );
   } catch (error) {
     notifications.show(
       "error",
-      error.message || "The Job status could not be changed."
+      mutationErrorMessage(error, "The Job status could not be changed.")
     );
   }
 }
@@ -1830,20 +1864,22 @@ function openJobDeleteDialog() {
   }
 }
 
-function confirmJobDeletion() {
+async function confirmJobDeletion() {
   const jobId = pendingJobDeletionId;
   if (!jobId || !jobDeleteDialog.open || isDeletingJob) {
     return;
   }
 
   isDeletingJob = true;
+  let operation;
   try {
-    careerState.deleteJob(jobId);
+    operation = careerState.deleteJob(jobId);
+    await operation;
   } catch (error) {
     isDeletingJob = false;
     notifications.show(
       "error",
-      error.message || "The Job could not be deleted."
+      mutationErrorMessage(error, "The Job could not be deleted.")
     );
     return;
   }
@@ -1852,7 +1888,7 @@ function confirmJobDeletion() {
   isDeletingJob = false;
   dialogManager.closeAfterMutation();
   returnToJobList();
-  notifications.show("success", "Job deleted.");
+  await notifications.show("success", "Job deleted.", operation);
 }
 
 function clearJobFieldErrors() {
@@ -1944,7 +1980,7 @@ function readJobForm() {
   );
 }
 
-function saveJob(event) {
+async function saveJob(event) {
   event.preventDefault();
   clearJobFieldErrors();
 
@@ -1986,11 +2022,13 @@ function saveJob(event) {
   }
 
   try {
+    let operation;
     if (existingJob) {
-      careerState.updateJob(existingJob.id, {
+      operation = careerState.updateJob(existingJob.id, {
         ...input,
         updatedAt: new Date().toISOString()
       });
+      await operation;
       if (!jobDetailPanel.hidden) {
         const updatedRecord = careerState.getJobs()
           .find((item) => item.id === existingJob.id);
@@ -2003,15 +2041,17 @@ function saveJob(event) {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       });
-      careerState.createJob(record);
+      operation = careerState.createJob(record);
+      await operation;
     }
 
     dialogManager.closeAfterMutation();
     resetJobForm();
     renderJobRecords();
-    notifications.show(
+    await notifications.show(
       "success",
-      existingJob ? "Job updated." : "Job created."
+      existingJob ? "Job updated." : "Job created.",
+      operation
     );
   } catch (error) {
     if (Array.isArray(error.errors)) {
@@ -2020,7 +2060,7 @@ function saveJob(event) {
 
     notifications.show(
       "error",
-      error.message || "The Job could not be saved."
+      mutationErrorMessage(error, "The Job could not be saved.")
     );
   }
 }
@@ -2087,7 +2127,7 @@ function readEmploymentForm() {
   };
 }
 
-function saveEmploymentRecord(event) {
+async function saveEmploymentRecord(event) {
   event.preventDefault();
   clearEmploymentFieldErrors();
 
@@ -2120,7 +2160,7 @@ function saveEmploymentRecord(event) {
 
   const existingId = editingEmploymentId;
   try {
-    const savedRecord = existingId !== null
+    const operation = existingId !== null
       ? careerState.updateEmploymentRecord(
         existingId,
         input,
@@ -2130,14 +2170,16 @@ function saveEmploymentRecord(event) {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       });
+    const savedRecord = await operation;
 
     dialogManager.closeAfterMutation();
     resetEmploymentForm();
     renderEmploymentRecords();
     renderAchievementRecords();
-    notifications.show(
+    await notifications.show(
       "success",
-      existingId !== null ? "Employment record updated." : "Employment record added."
+      existingId !== null ? "Employment record updated." : "Employment record added.",
+      operation
     );
     focusEmploymentEditAction(savedRecord.id);
   } catch (error) {
@@ -2147,7 +2189,7 @@ function saveEmploymentRecord(event) {
 
     notifications.show(
       "error",
-      error.message || "The employment record could not be saved."
+      mutationErrorMessage(error, "The employment record could not be saved.")
     );
   }
 }
@@ -2191,7 +2233,7 @@ function openEmploymentDeleteDialog(record, invoker) {
   }
 }
 
-function confirmEmploymentDeletion() {
+async function confirmEmploymentDeletion() {
   const pendingDeletion = pendingEmploymentDeletion;
   if (
     !pendingDeletion
@@ -2202,13 +2244,15 @@ function confirmEmploymentDeletion() {
   }
 
   isDeletingEmployment = true;
+  let operation;
   try {
-    careerState.deleteEmploymentRecord(pendingDeletion.id);
+    operation = careerState.deleteEmploymentRecord(pendingDeletion.id);
+    await operation;
   } catch (error) {
     isDeletingEmployment = false;
     notifications.show(
       "error",
-      error.message || "The employment record could not be deleted."
+      mutationErrorMessage(error, "The employment record could not be deleted.")
     );
     return;
   }
@@ -2221,7 +2265,7 @@ function confirmEmploymentDeletion() {
   if (editingEmploymentId === pendingDeletion.id) {
     resetEmploymentForm();
   }
-  notifications.show("success", "Employment record deleted.");
+  await notifications.show("success", "Employment record deleted.", operation);
   focusEmploymentEditAction(pendingDeletion.focusRecordId);
 }
 
@@ -2495,27 +2539,27 @@ function getAchievementVerificationLabel(status) {
     || "Unknown";
 }
 
-function updateAchievementVerificationStatus(recordId, select) {
+async function updateAchievementVerificationStatus(recordId, select) {
   try {
-    const updatedRecord = careerState.updateAchievementVerificationStatus(
+    const operation = careerState.updateAchievementVerificationStatus(
       recordId,
       select.value,
       new Date().toISOString()
     );
-    dialogManager.closeAfterMutation();
+    const updatedRecord = await operation;
     renderAchievementRecords();
-    notifications.show(
+    await notifications.show(
       "success",
-      `Verification status updated to ${getAchievementVerificationLabel(updatedRecord.verificationStatus)}.`
+      `Verification status updated to ${getAchievementVerificationLabel(updatedRecord.verificationStatus)}.`,
+      operation
     );
     focusAchievementAction(recordId, ".achievement-status-update");
   } catch (error) {
-    renderAchievementRecords();
     notifications.show(
       "error",
-      error.message || "The verification status could not be updated."
+      mutationErrorMessage(error, "The verification status could not be updated.")
     );
-    focusAchievementAction(recordId, ".achievement-status-update");
+    select.focus();
   }
 }
 
@@ -2571,9 +2615,9 @@ function renderAchievementRecords() {
     statusButton.className = "achievement-secondary achievement-status-update";
     statusButton.type = "button";
     statusButton.textContent = "Update status";
-    statusButton.addEventListener("click", () =>
+    statusButton.addEventListener("click", mutationHandler(() =>
       updateAchievementVerificationStatus(record.id, statusSelect)
-    );
+    ));
     statusControl.append(statusLabel, statusSelect, statusButton);
     verification.append(verificationHeading, currentStatus, statusControl);
     article.append(verification);
@@ -2760,7 +2804,7 @@ function readAchievementForm() {
   };
 }
 
-function saveAchievementRecord(event) {
+async function saveAchievementRecord(event) {
   event.preventDefault();
   clearAchievementFieldErrors();
 
@@ -2768,30 +2812,33 @@ function saveAchievementRecord(event) {
     const input = readAchievementForm();
     let successMessage;
     let savedRecord;
+    let operation;
     if (editingAchievementId) {
       const existingRecord = careerState.getAchievementRecords()
         .find((record) => record.id === editingAchievementId);
-      savedRecord = careerState.updateAchievementRecord(
+      operation = careerState.updateAchievementRecord(
         editingAchievementId,
         input,
         new Date().toISOString()
       );
+      savedRecord = await operation;
       successMessage = existingRecord.verificationStatus === "verified"
         && savedRecord.verificationStatus === "unverified"
         ? "Achievement content changed. Verification was reset to Unverified."
         : "Achievement updated.";
     } else {
-      savedRecord = careerState.addAchievementRecord(input, {
+      operation = careerState.addAchievementRecord(input, {
         id: createRecordId(),
         createdAt: new Date().toISOString()
       });
+      savedRecord = await operation;
       successMessage = "Achievement added.";
     }
 
     dialogManager.closeAfterMutation();
     resetAchievementForm();
     renderAchievementRecords();
-    notifications.show("success", successMessage);
+    await notifications.show("success", successMessage, operation);
     focusAchievementAction(
       savedRecord.id,
       ".achievement-action-button:not(.achievement-action-button--delete)"
@@ -2803,7 +2850,7 @@ function saveAchievementRecord(event) {
 
     notifications.show(
       "error",
-      error.message || "The achievement could not be saved."
+      mutationErrorMessage(error, "The achievement could not be saved.")
     );
   }
 }
@@ -2859,7 +2906,7 @@ function openAchievementDeleteDialog(record, invoker) {
   }
 }
 
-function confirmAchievementDeletion() {
+async function confirmAchievementDeletion() {
   const pendingDeletion = pendingAchievementDeletion;
   if (
     !pendingDeletion
@@ -2870,13 +2917,15 @@ function confirmAchievementDeletion() {
   }
 
   isDeletingAchievement = true;
+  let operation;
   try {
-    careerState.deleteAchievementRecord(pendingDeletion.id);
+    operation = careerState.deleteAchievementRecord(pendingDeletion.id);
+    await operation;
   } catch (error) {
     isDeletingAchievement = false;
     notifications.show(
       "error",
-      error.message || "The achievement could not be deleted."
+      mutationErrorMessage(error, "The achievement could not be deleted.")
     );
     return;
   }
@@ -2888,7 +2937,7 @@ function confirmAchievementDeletion() {
     resetAchievementForm();
   }
   renderAchievementRecords();
-  notifications.show("success", "Achievement deleted.");
+  await notifications.show("success", "Achievement deleted.", operation);
   focusAchievementAction(
     pendingDeletion.focusRecordId,
     ".achievement-action-button:not(.achievement-action-button--delete)"
@@ -2927,7 +2976,7 @@ profileAction.addEventListener("click", openProfileDialog);
 profileCancel.addEventListener("click", () => {
   dialogManager.requestClose();
 });
-profileForm.addEventListener("submit", saveProfile);
+profileForm.addEventListener("submit", mutationHandler(saveProfile));
 profileForm.addEventListener("input", (event) => {
   const field = profileFields.find((item) => profileControls[item] === event.target);
 
@@ -2940,7 +2989,7 @@ employmentAddAction.addEventListener("click", () => {
   resetEmploymentForm();
   openEmploymentDialog({ invoker: employmentAddAction });
 });
-employmentForm.addEventListener("submit", saveEmploymentRecord);
+employmentForm.addEventListener("submit", mutationHandler(saveEmploymentRecord));
 employmentForm.addEventListener("input", (event) => {
   const field = employmentFields.find((item) => employmentControls[item] === event.target);
 
@@ -2976,9 +3025,9 @@ employmentDeleteCancel.addEventListener("click", () => {
   dialogManager.requestClose();
   pendingEmploymentDeletion = null;
 });
-employmentDeleteConfirm.addEventListener("click", confirmEmploymentDeletion);
+employmentDeleteConfirm.addEventListener("click", mutationHandler(confirmEmploymentDeletion));
 
-achievementForm.addEventListener("submit", saveAchievementRecord);
+achievementForm.addEventListener("submit", mutationHandler(saveAchievementRecord));
 achievementForm.addEventListener("input", (event) => {
   const field = event.target.closest(".achievement-field");
   const control = field?.querySelector("input, textarea, select");
@@ -3021,7 +3070,7 @@ achievementDeleteCancel.addEventListener("click", () => {
   dialogManager.requestClose();
   pendingAchievementDeletion = null;
 });
-achievementDeleteConfirm.addEventListener("click", confirmAchievementDeletion);
+achievementDeleteConfirm.addEventListener("click", mutationHandler(confirmAchievementDeletion));
 jobCreateAction.addEventListener("click", () => {
   openJobDialog({ invoker: jobCreateAction });
 });
@@ -3029,7 +3078,7 @@ jobEmptyCreateAction.addEventListener("click", () => {
   openJobDialog({ invoker: jobCreateAction });
 });
 jobBackAction.addEventListener("click", returnToJobList);
-jobArchiveAction.addEventListener("click", changeSelectedJobStatus);
+jobArchiveAction.addEventListener("click", mutationHandler(changeSelectedJobStatus));
 jobDeleteAction.addEventListener("click", openJobDeleteDialog);
 jobDeleteDialog.addEventListener("cancel", () => {
   if (!isDeletingJob) {
@@ -3040,14 +3089,14 @@ jobDeleteCancel.addEventListener("click", () => {
   dialogManager.requestClose();
   pendingJobDeletionId = null;
 });
-jobDeleteConfirm.addEventListener("click", confirmJobDeletion);
+jobDeleteConfirm.addEventListener("click", mutationHandler(confirmJobDeletion));
 requirementAddAction.addEventListener("click", () => {
   openRequirementDialog({
     invoker: requirementAddAction,
     jobId: jobDetailPanel.dataset.jobId
   });
 });
-requirementForm.addEventListener("submit", saveRequirement);
+requirementForm.addEventListener("submit", mutationHandler(saveRequirement));
 requirementForm.addEventListener("input", (event) => {
   const field = requirementFields.find(
     (item) => requirementControls[item] === event.target
@@ -3076,7 +3125,7 @@ requirementDeleteCancel.addEventListener("click", () => {
   dialogManager.requestClose();
   pendingRequirementDeletion = null;
 });
-requirementDeleteConfirm.addEventListener("click", confirmRequirementDeletion);
+requirementDeleteConfirm.addEventListener("click", mutationHandler(confirmRequirementDeletion));
 achievementMappingSearch.addEventListener("input", renderAchievementMappingResults);
 achievementMappingSearchClear.addEventListener("click", () => {
   achievementMappingSearch.value = "";
@@ -3106,7 +3155,7 @@ jobEditAction.addEventListener("click", () => {
 
   openJobDialog({ invoker: jobEditAction, record });
 });
-jobForm.addEventListener("submit", saveJob);
+jobForm.addEventListener("submit", mutationHandler(saveJob));
 jobForm.addEventListener("input", (event) => {
   const field = jobFields.find((item) => jobControls[item] === event.target);
 

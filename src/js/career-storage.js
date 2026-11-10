@@ -6,9 +6,10 @@ import { validateAchievementRecord } from "./achievement-model.js";
 import { addProvenanceErrors } from "./provenance-model.js";
 import { validateJobRecord } from "./job-model.js";
 import { validateRequirementRecord } from "./requirement-model.js";
+import { createSnapshotWriter } from "./snapshot-writer.js";
 
 const STORAGE_KEY = "careerpilot.state";
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const v1SnapshotFields = ["profile", "employmentRecords", "achievementRecords"];
 const v2SnapshotFields = [
   ...v1SnapshotFields,
@@ -39,7 +40,7 @@ function snapshotFieldsForVersion(version) {
   if (version === 3) {
     return v3SnapshotFields;
   }
-  if (version === 4) {
+  if (version === 4 || version === 5) {
     return v4SnapshotFields;
   }
   return [];
@@ -1046,7 +1047,7 @@ function migrateV3ToV4(snapshot) {
   };
 }
 
-function validateSnapshot(snapshot, version = SCHEMA_VERSION) {
+function validateSnapshot(snapshot, version = 4) {
   const errors = [];
   const fields = snapshotFieldsForVersion(version);
   let snapshotIsPlainObject = false;
@@ -1485,7 +1486,7 @@ function validateEnvelope(envelope, version) {
   }
 
   const fields = snapshotFieldsForVersion(version);
-  const envelopeFields = ["version", ...fields];
+  const envelopeFields = ["version", ...(version === 5 ? ["snapshotRevision", "careerRevision"] : []), ...fields];
   const expected = new Set(envelopeFields);
   for (const key of keys) {
     if (typeof key !== "string" || !expected.has(key)) {
@@ -1511,6 +1512,18 @@ function validateEnvelope(envelope, version) {
           path: `envelope.${field}`,
           message: "Stored envelope properties must be enumerable data properties."
         });
+      }
+      if (version === 5) {
+        const snapshotRevision = Object.getOwnPropertyDescriptor(envelope, "snapshotRevision")?.value;
+        const careerRevision = Object.getOwnPropertyDescriptor(envelope, "careerRevision")?.value;
+        if (![snapshotRevision, careerRevision].every((value) => Number.isSafeInteger(value) && value >= 0)
+          || careerRevision > snapshotRevision) {
+          addError(errors, {
+            field: "envelope.snapshotRevision",
+            path: "envelope.snapshotRevision",
+            message: "Revisions must be non-negative safe integers and careerRevision cannot exceed snapshotRevision."
+          });
+        }
       }
     }
   }
@@ -1635,7 +1648,7 @@ export function createCareerStorage(storage) {
       }
 
       if (raw === null) {
-        return { status: "missing", snapshot: emptySnapshot() };
+        return { status: "missing", snapshot: emptySnapshot(), snapshotRevision: 0, careerRevision: 0 };
       }
       if (typeof raw !== "string") {
         writesDisabled = true;
@@ -1734,7 +1747,7 @@ export function createCareerStorage(storage) {
           writesDisabled: true
         };
       }
-      if (version !== 1 && version !== 2 && version !== 3 && version !== 4) {
+      if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5) {
         writesDisabled = true;
         return { status: "unsupported-version", version, writesDisabled: true };
       }
@@ -1769,7 +1782,7 @@ export function createCareerStorage(storage) {
         };
       }
 
-      const validation = validateSnapshot(snapshot, version);
+      const validation = validateSnapshot(snapshot, version === 5 ? 4 : version);
       if (!validation.valid) {
         writesDisabled = true;
         return {
@@ -1852,8 +1865,13 @@ export function createCareerStorage(storage) {
         };
       }
 
-      if (version === 4) {
-        return { status: "loaded", snapshot: v3Validation.snapshot };
+      if (version >= 4) {
+        return {
+          status: "loaded",
+          snapshot: v3Validation.snapshot,
+          snapshotRevision: version === 5 ? envelope.snapshotRevision : 0,
+          careerRevision: version === 5 ? envelope.careerRevision : 0
+        };
       }
 
       let migration;
@@ -1891,24 +1909,11 @@ export function createCareerStorage(storage) {
 
       if (historicalNegativeZero) {
         writesDisabled = true;
-        return { status: "loaded", snapshot: finalValidation.snapshot, writesDisabled: true };
+        return { status: "loaded", snapshot: finalValidation.snapshot, snapshotRevision: 0, careerRevision: 0, writesDisabled: true };
       }
-      return { status: "loaded", snapshot: finalValidation.snapshot };
+      return { status: "loaded", snapshot: finalValidation.snapshot, snapshotRevision: 0, careerRevision: 0 };
   }
-  return {
-    load: loadStored,
-    save(snapshot) {
-      if (writesDisabled) {
-        return { status: "writes-disabled" };
-      }
-      const existing = loadStored();
-      if (existing.status === "unavailable") {
-        return { status: "write-failed", error: existing.error };
-      }
-      if (writesDisabled || existing.writesDisabled) {
-        return { status: "writes-disabled" };
-      }
-
+  function validateForSave(snapshot) {
       const validation = validateSnapshot(snapshot);
       if (!validation.valid) {
         return { status: "invalid-snapshot", errors: validation.errors };
@@ -1923,6 +1928,21 @@ export function createCareerStorage(storage) {
       if (snapshotFidelityErrors.length > 0) {
         return { status: "json-fidelity-error", errors: snapshotFidelityErrors };
       }
+      return { status: "valid", snapshot: validation.snapshot };
+  }
+  function saveUnderLock(snapshot, revisions) {
+      if (writesDisabled) {
+        return { status: "writes-disabled" };
+      }
+      const existing = loadStored();
+      if (existing.status === "unavailable") {
+        return { status: "write-failed", error: existing.error };
+      }
+      if (writesDisabled || existing.writesDisabled) {
+        return { status: "writes-disabled" };
+      }
+      const validation = validateForSave(snapshot);
+      if (validation.status !== "valid") return validation;
 
       let detached;
       try {
@@ -1947,6 +1967,7 @@ export function createCareerStorage(storage) {
       try {
         serialized = JSON.stringify({
           version: SCHEMA_VERSION,
+          ...revisions,
           ...detachedValidation.snapshot
         });
       } catch {
@@ -1979,6 +2000,15 @@ export function createCareerStorage(storage) {
       }
 
       return { status: "saved" };
+  }
+  return {
+    load: loadStored,
+    createWriter(options) {
+      return createSnapshotWriter({
+        ...options,
+        storage: { load: loadStored, save: saveUnderLock },
+        validatePrepared: validateForSave
+      });
     }
   };
 }

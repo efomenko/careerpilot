@@ -71,7 +71,7 @@ class FakeHistory {
   }
 }
 
-function setup(initialHash = "#dashboard") {
+function setup(initialHash = "#dashboard", { isNavigationBlocked } = {}) {
   const window = new FakeWindow(initialHash);
   const rendered = [];
   let dialogOpen = false;
@@ -97,7 +97,8 @@ function setup(initialHash = "#dashboard") {
     window,
     dialogManager,
     views,
-    navigateTo: (viewName, options = {}) => rendered.push({ viewName, options })
+    navigateTo: (viewName, options = {}) => rendered.push({ viewName, options }),
+    isNavigationBlocked
   });
   controller.start();
 
@@ -135,6 +136,59 @@ function setup(initialHash = "#dashboard") {
     }
   };
 }
+
+test("pending mutations block programmatic navigation and restore Back without closing a dialog", () => {
+  let blocked = false;
+  const state = setup("#dashboard", { isNavigationBlocked: () => blocked });
+  state.controller.navigate("profile");
+  state.controller.navigate("employment");
+  state.openDialog();
+  const count = state.rendered.length;
+  blocked = true;
+
+  assert.equal(state.controller.navigate("achievements"), false);
+  state.window.history.go(-1);
+  assert.equal(state.window.location.hash, "#employment");
+  assert.equal(state.dialogOpen, true);
+  assert.equal(state.requestCloseCount, 0);
+  assert.equal(state.rendered.length, count);
+
+  blocked = false;
+  state.window.history.go(-1);
+  assert.equal(state.dialogOpen, false);
+  assert.equal(state.rendered.at(-1).viewName, "profile");
+});
+
+test("pending mutations restore browser navigation even without an open dialog", () => {
+  let blocked = false;
+  const state = setup("#dashboard", { isNavigationBlocked: () => blocked });
+  state.controller.navigate("profile");
+  state.controller.navigate("employment");
+  const count = state.rendered.length;
+  blocked = true;
+  state.window.history.go(-1);
+  assert.equal(state.window.location.hash, "#employment");
+  assert.equal(state.rendered.length, count);
+  blocked = false;
+  state.window.history.go(-1);
+  assert.equal(state.rendered.at(-1).viewName, "profile");
+});
+
+test("pending mutations restore the URL when history entries share an index", () => {
+  let blocked = false;
+  const state = setup("#dashboard", { isNavigationBlocked: () => blocked });
+  state.controller.navigate("profile");
+  state.window.history.pushState(state.window.history.state, "", "#employment");
+  state.window.dispatch("popstate", { state: state.window.history.state });
+  state.openDialog();
+  const count = state.rendered.length;
+  blocked = true;
+  state.window.history.go(-1);
+  assert.equal(state.window.location.hash, "#employment");
+  assert.equal(state.dialogOpen, true);
+  assert.equal(state.requestCloseCount, 0);
+  assert.equal(state.rendered.length, count);
+});
 
 test("ordinary navigation and Back/Forward work without an open dialog", () => {
   const state = setup();

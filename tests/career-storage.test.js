@@ -233,12 +233,28 @@ function storedV2(value = v2Snapshot(), overrides = {}) {
   return JSON.stringify(v2Envelope(value, overrides));
 }
 
+async function writeSnapshot(adapter, value) {
+  const initial = adapter.load();
+  const writer = adapter.createWriter({
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
+    initialSnapshot: initial.snapshot ?? createCareerState().getSnapshot(),
+    initialSnapshotRevision: initial.snapshotRevision ?? 0,
+    initialCareerRevision: initial.careerRevision ?? 0,
+    copySnapshot: (snapshot) => snapshot,
+    careerData: () => null
+  });
+  return writer.write(initial.snapshotRevision ?? 0, () => ({ snapshot: value, forceWrite: true }));
+}
+
 test("missing storage returns an empty snapshot", () => {
   const fake = createFakeStorage();
   const result = createCareerStorage(fake).load();
 
   assert.deepEqual(result, {
     status: "missing",
+    snapshotRevision: 0,
+    careerRevision: 0,
     snapshot: snapshot({
       profile: null,
       employmentRecords: [],
@@ -327,14 +343,15 @@ test("rejects non-array legacy Requirements when loading a v4 envelope", () => {
   }
 });
 
-test("saving non-array legacy Requirements fails validation without writing", () => {
+test("saving non-array legacy Requirements fails validation without writing", async () => {
   const original = stored(snapshot());
   const fake = createFakeStorage(original);
   const adapter = createCareerStorage(fake);
   const data = snapshot({ legacyRequirements: { legacy: true } });
-  const result = adapter.save(data);
+  const result = await writeSnapshot(adapter, data);
 
-  assert.equal(result.status, "invalid-snapshot");
+  assert.equal(result.status, "save-failed");
+  assert.equal(result.cause, "invalid-snapshot");
   assert.ok(result.errors.some((error) =>
     error.field === "legacyRequirements"
       && error.message === "Must be an array."
@@ -486,7 +503,7 @@ test("migrates valid empty version-1 snapshots through version 4 without writing
   assert.equal(fake.values.get(storageKey), original);
 });
 
-test("migrates populated version-1 snapshots through version 4", () => {
+test("migrates populated version-1 snapshots through version 5", async () => {
   const data = v1Snapshot({
     achievementRecords: [achievementRecord({
       employmentId: "employment-1",
@@ -510,16 +527,18 @@ test("migrates populated version-1 snapshots through version 4", () => {
   assert.deepEqual(fake.calls.setItem, []);
   assert.equal(fake.values.get(storageKey), original);
   fake.setError = new Error("quota exceeded during migration");
-  assert.equal(adapter.save(result.snapshot).status, "write-failed");
+  const failed = await writeSnapshot(adapter, result.snapshot);
+  assert.equal(failed.status, "save-failed");
+  assert.equal(failed.cause, "write-failed");
   assert.equal(fake.values.get(storageKey), original);
   fake.setError = null;
-  assert.equal(adapter.save(result.snapshot).status, "saved");
+  assert.equal((await writeSnapshot(adapter, result.snapshot)).status, "saved");
   const saved = JSON.parse(fake.values.get(storageKey));
-  assert.equal(saved.version, 4);
-  assert.deepEqual(saved, { version: 4, ...result.snapshot });
+  assert.equal(saved.version, 5);
+  assert.deepEqual(saved, { version: 5, snapshotRevision: 1, careerRevision: 0, ...result.snapshot });
 });
 
-test("rejects malformed version-1 snapshots during migration", () => {
+test("rejects malformed version-1 snapshots during migration", async () => {
   const invalidSnapshots = [
     { profile: null, employmentRecords: [] },
     v1Snapshot({ profile: profileRecord({ fullName: "" }) }),
@@ -538,7 +557,7 @@ test("rejects malformed version-1 snapshots during migration", () => {
 
     assert.equal(result.status, "corrupt");
     assert.equal(fake.values.get(storageKey), original);
-    assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
+    assert.deepEqual(await writeSnapshot(adapter, snapshot()), { status: "read-failed", cause: "corrupt" });
     assert.deepEqual(fake.calls.setItem, []);
   }
 });
@@ -569,7 +588,7 @@ test("migrates a valid version-3 snapshot to v4 without writing", () => {
   assert.equal(fake.values.get(storageKey), raw);
 });
 
-test("rejects v3 Employment dates with year 0000 without replacing stored data", () => {
+test("rejects v3 Employment dates with year 0000 without replacing stored data", async () => {
   const data = v3Snapshot({
     employmentRecords: [employmentRecord({
       startDate: "0000-01-01",
@@ -586,7 +605,9 @@ test("rejects v3 Employment dates with year 0000 without replacing stored data",
   assert.ok(result.error.errors.some((error) => /Year 0000/.test(error.message)));
   assert.deepEqual(fake.calls.setItem, []);
   assert.equal(fake.values.get(storageKey), raw);
-  assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
+  assert.deepEqual(await writeSnapshot(adapter, snapshot()), { status: "read-failed", cause: "corrupt" });
+  assert.deepEqual(fake.calls.setItem, []);
+  assert.equal(fake.values.get(storageKey), raw);
 });
 
 test("historical migrations preserve supplied provenance and default missing provenance", () => {
@@ -607,7 +628,7 @@ test("historical migrations preserve supplied provenance and default missing pro
   assert.deepEqual(missing.snapshot.profile.provenance, []);
 });
 
-test("incomplete provenance in historical and v4 snapshots is protected without partial hydration", () => {
+test("incomplete provenance in historical and v4 snapshots is protected without partial hydration", async () => {
   for (const [version, data] of [[1, v1Snapshot()], [2, v2Snapshot()], [3, v3Snapshot()], [4, snapshot()]]) {
     data.profile.provenance = [{ excerpt: "legacy source" }];
     const raw = JSON.stringify({ version, ...data });
@@ -617,8 +638,8 @@ test("incomplete provenance in historical and v4 snapshots is protected without 
     assert.equal(loaded.status, "corrupt", `version ${version}`);
     assert.equal(loaded.writesDisabled, true);
     assert.equal(fake.values.get(storageKey), raw);
-    assert.equal(adapter.save(snapshot()).status, "writes-disabled");
-    assert.equal(createCareerStorage(fake).save(snapshot()).status, "writes-disabled");
+    assert.deepEqual(await writeSnapshot(adapter, snapshot()), { status: "read-failed", cause: "corrupt" });
+    assert.deepEqual(await writeSnapshot(createCareerStorage(fake), snapshot()), { status: "read-failed", cause: "corrupt" });
     assert.deepEqual(fake.calls.setItem, []);
 
     const persistence = createCareerPersistence(fake);
@@ -628,7 +649,7 @@ test("incomplete provenance in historical and v4 snapshots is protected without 
   }
 });
 
-test("pre-write recheck protects a snapshot containing incomplete provenance", () => {
+test("pre-write recheck protects a snapshot containing incomplete provenance", async () => {
   const invalid = snapshot();
   invalid.profile.provenance = [{ excerpt: "legacy source" }];
   const protectedRaw = stored(invalid);
@@ -638,17 +659,20 @@ test("pre-write recheck protects a snapshot containing incomplete provenance", (
   const adapter = createCareerStorage({
     getItem() {
       reads += 1;
-      if (reads === 2) raw = protectedRaw;
+      if (reads === 3) raw = protectedRaw;
       return raw;
     },
     setItem(key, value) { writes += 1; raw = value; }
   });
-  assert.equal(adapter.save(snapshot()).status, "writes-disabled");
+  const result = await writeSnapshot(adapter, snapshot());
+  assert.equal(result.status, "save-failed");
+  assert.equal(result.cause, "writes-disabled");
+  assert.equal(reads, 3);
   assert.equal(raw, protectedRaw);
   assert.equal(writes, 0);
 });
 
-test("provenance proxy reflection failures do not write or replace stored data", () => {
+test("provenance proxy reflection failures do not write or replace stored data", async () => {
   const raw = stored(snapshot());
   for (const trap of ["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"]) {
     for (const location of ["array", "item", "nested"]) {
@@ -660,10 +684,10 @@ test("provenance proxy reflection failures do not write or replace stored data",
         : [location === "item" ? new Proxy(item, handler) : item];
       const fake = createFakeStorage(raw);
       const adapter = createCareerStorage(fake);
-      assert.notEqual(adapter.save(data).status, "saved", `${location}: ${trap}`);
+      assert.notEqual((await writeSnapshot(adapter, data)).status, "saved", `${location}: ${trap}`);
       assert.equal(fake.values.get(storageKey), raw);
       assert.deepEqual(fake.calls.setItem, []);
-      assert.equal(adapter.save(snapshot()).status, "saved");
+      assert.equal((await writeSnapshot(adapter, snapshot())).status, "saved");
     }
   }
 });
@@ -691,7 +715,7 @@ test("historical malformed dates and provenance return corrupt without throwing"
   }
 });
 
-test("v4 chronology uses known intervals without inventing unknown dates", () => {
+test("v4 chronology uses known intervals without inventing unknown dates", async () => {
   const cases = [
     [null, { value: "1900", precision: "year" }, true],
     [{ value: "2021", precision: "year" }, null, true],
@@ -706,28 +730,37 @@ test("v4 chronology uses known intervals without inventing unknown dates", () =>
     const data = snapshot({
       employmentRecords: [employmentRecord({ startDate, endDate, isCurrent: false })]
     });
-    const adapter = createCareerStorage(createFakeStorage());
-    assert.equal(adapter.save(data).status, valid ? "saved" : "invalid-snapshot");
+    const fake = createFakeStorage();
+    const result = await writeSnapshot(createCareerStorage(fake), data);
+    assert.equal(result.status, valid ? "saved" : "save-failed");
+    if (!valid) {
+      assert.equal(result.cause, "invalid-snapshot");
+      assert.deepEqual(fake.calls.setItem, []);
+    }
   }
 });
 
-test("v4 storage checks provenance types and rejects lossy opaque values", () => {
+test("v4 storage checks provenance types and rejects lossy opaque values", async () => {
   for (const provenance of [null, [], [provenanceItem()]]) {
     const data = snapshot();
     data.profile.provenance = provenance;
     data.employmentRecords[0].provenance = provenance;
     data.achievementRecords[0].provenance = provenance;
-    assert.equal(createCareerStorage(createFakeStorage()).save(data).status, "saved");
+    assert.equal((await writeSnapshot(createCareerStorage(createFakeStorage()), data)).status, "saved");
   }
   const invalid = snapshot();
   invalid.profile.provenance = "invalid";
-  assert.equal(createCareerStorage(createFakeStorage()).save(invalid).status, "invalid-snapshot");
+  assert.equal((await writeSnapshot(createCareerStorage(createFakeStorage()), invalid)).cause, "invalid-snapshot");
   assert.equal(createCareerStorage(createFakeStorage(stored(invalid))).load().status, "corrupt");
   const cycle = {};
   cycle.self = cycle;
   for (const value of [undefined, NaN, -0, 1n, new Date(), new Array(1), cycle]) {
     const data = snapshot({ educationRecords: [value] });
-    assert.equal(createCareerStorage(createFakeStorage()).save(data).status, "json-fidelity-error");
+    const fake = createFakeStorage();
+    const result = await writeSnapshot(createCareerStorage(fake), data);
+    assert.equal(result.status, "save-failed");
+    assert.equal(result.cause, "json-fidelity-error");
+    assert.deepEqual(fake.calls.setItem, []);
   }
 });
 
@@ -885,7 +918,7 @@ test("accepts an empty v2 Requirements and mappings database and does not write 
   assert.equal(fake.values.get(storageKey), raw);
 });
 
-test("malformed v2 Requirements fail safely without overwriting stored data", () => {
+test("malformed v2 Requirements fail safely without overwriting stored data", async () => {
   const raw = storedV2(v2Snapshot({ requirements: "not-an-array" }));
   const fake = createFakeStorage(raw);
   const adapter = createCareerStorage(fake);
@@ -896,10 +929,12 @@ test("malformed v2 Requirements fail safely without overwriting stored data", ()
   assert.ok(result.error.errors.some((error) => error.field === "requirements"));
   assert.equal(fake.values.get(storageKey), raw);
   assert.deepEqual(fake.calls.setItem, []);
-  assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
+  assert.deepEqual(await writeSnapshot(adapter, snapshot()), { status: "read-failed", cause: "corrupt" });
+  assert.equal(fake.values.get(storageKey), raw);
+  assert.deepEqual(fake.calls.setItem, []);
 });
 
-test("loads historical negative zero and prevents subsequent lossy writes", () => {
+test("loads historical negative zero and prevents subsequent lossy writes", async () => {
   const data = v2Snapshot({ requirements: [{ id: "legacy", unsupported: -0, ordinary: 4.5 }] });
   const raw = storedV2(data).replace('"unsupported":0', '"unsupported":-0');
   const fake = createFakeStorage(raw);
@@ -912,12 +947,12 @@ test("loads historical negative zero and prevents subsequent lossy writes", () =
   const state = createCareerState();
   state.restoreSnapshot(result.snapshot);
   assert.ok(Object.is(state.getSnapshot().legacyRequirements[0].unsupported, -0));
-  assert.deepEqual(adapter.save(state.getSnapshot()), { status: "writes-disabled" });
-  assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
+  assert.deepEqual(await writeSnapshot(adapter, state.getSnapshot()), { status: "writes-disabled" });
+  assert.deepEqual(await writeSnapshot(adapter, snapshot()), { status: "writes-disabled" });
   assert.equal(adapter.load().writesDisabled, true);
-  assert.equal(createCareerStorage(fake).save(snapshot()).status, "writes-disabled");
+  assert.equal((await writeSnapshot(createCareerStorage(fake), snapshot())).status, "writes-disabled");
   const freshFake = createFakeStorage(raw);
-  assert.equal(createCareerStorage(freshFake).save(snapshot()).status, "writes-disabled");
+  assert.equal((await writeSnapshot(createCareerStorage(freshFake), snapshot())).status, "writes-disabled");
   assert.equal(freshFake.values.get(storageKey), raw);
   assert.deepEqual(freshFake.calls.setItem, []);
   assert.equal(fake.values.get(storageKey), raw);
@@ -928,7 +963,10 @@ test("loads historical negative zero and prevents subsequent lossy writes", () =
   assert.ok(Object.is(persistence.state.getSnapshot().legacyRequirements[0].unsupported, -0));
   assert.equal(persistence.getStatus().persistentWarning.kind, "read-only");
   assert.match(persistence.getStatus().persistentWarning.message, /remains available.*cannot be saved/);
-  persistence.state.updateProfile({ fullName: "New", headline: "", summary: "", skills: [] }, timestamp);
+  const before = persistence.state.getSnapshot();
+  await assert.rejects(persistence.state.updateProfile({ fullName: "New", headline: "", summary: "", skills: [] }, timestamp),
+    (error) => error.status === "writes-disabled");
+  assert.deepEqual(persistence.state.getSnapshot(), before);
   assert.equal(persistence.getStatus().transientWarning.kind, "write-disabled");
   assert.equal(persistence.getStatus().persistentWarning.kind, "read-only");
   assert.equal(persistentFake.values.get(storageKey), raw);
@@ -942,7 +980,7 @@ test("loads historical negative zero and prevents subsequent lossy writes", () =
   assert.equal(v3Result.status, "loaded");
   assert.equal(v3Result.writesDisabled, true);
   assert.ok(Object.is(v3Result.snapshot.legacyRequirements[0].score, -0));
-  assert.equal(v3Adapter.save(snapshot()).status, "writes-disabled");
+  assert.equal((await writeSnapshot(v3Adapter, snapshot())).status, "writes-disabled");
   assert.equal(v3Fake.values.get(storageKey), v3Raw);
 
   const ordinaryRaw = storedV2(v2Snapshot({ requirements: [{ score: 4.5 }] }));
@@ -950,32 +988,33 @@ test("loads historical negative zero and prevents subsequent lossy writes", () =
   const ordinaryAdapter = createCareerStorage(ordinaryFake);
   const ordinaryResult = ordinaryAdapter.load();
   assert.equal(ordinaryResult.status, "loaded");
-  assert.equal(ordinaryAdapter.save(ordinaryResult.snapshot).status, "saved");
+  assert.equal((await writeSnapshot(ordinaryAdapter, ordinaryResult.snapshot)).status, "saved");
   assert.equal(ordinaryAdapter.load().snapshot.legacyRequirements[0].score, 4.5);
 });
 
-test("unsafe integer tokens protect stored bytes before hydration and direct saves", () => {
+test("unsafe integer tokens protect stored bytes before hydration and direct saves", async () => {
   for (const token of ["9007199254740993", "9007199254740992", "-9007199254740993",
     "9.007199254740992e15", "9007199254740992.0"]) {
     const raw = stored(snapshot({ educationRecords: [{ value: 1 }] })).replace('"value":1', `"value":${token}`);
     const fake = createFakeStorage(raw);
     const adapter = createCareerStorage(fake);
     assert.deepEqual(adapter.load(), { status: "protected", reason: "unsafe-integer", writesDisabled: true });
-    assert.equal(adapter.save(snapshot()).status, "writes-disabled");
-    assert.equal(createCareerStorage(fake).save(snapshot()).status, "writes-disabled");
+    assert.deepEqual(await writeSnapshot(adapter, snapshot()), { status: "read-failed", cause: "protected" });
+    assert.deepEqual(await writeSnapshot(createCareerStorage(fake), snapshot()), { status: "read-failed", cause: "protected" });
     const persistence = createCareerPersistence(fake);
     assert.equal(persistence.getStatus().persistentWarning.kind, "read-only");
     assert.match(persistence.getStatus().persistentWarning.message, /not been loaded.*cannot be saved/);
-    persistence.state.createProfile({ fullName: "New", headline: "", summary: "", skills: [] }, {
+    await assert.rejects(persistence.state.createProfile({ fullName: "New", headline: "", summary: "", skills: [] }, {
       id: "new", createdAt: timestamp
-    });
+    }), (error) => error.status === "writes-disabled");
+    assert.equal(persistence.state.getProfile(), null);
     assert.equal(persistence.getStatus().transientWarning.kind, "write-disabled");
     assert.equal(fake.values.get(storageKey), raw);
     assert.deepEqual(fake.calls.setItem, []);
   }
 });
 
-test("fractional precision loss protects numeric tokens in v1 through v4 snapshots", () => {
+test("fractional precision loss protects numeric tokens in v1 through v4 snapshots", async () => {
   const cases = [
     v1Envelope(v1Snapshot({ achievementRecords: [achievementRecord({ evidence: [{ score: 1 }] })] })),
     v2Envelope(v2Snapshot({ requirements: [{ score: 1 }] })),
@@ -990,14 +1029,14 @@ test("fractional precision loss protects numeric tokens in v1 through v4 snapsho
     assert.deepEqual(adapter.load(), {
       status: "protected", reason: "numeric-precision", writesDisabled: true
     }, `version ${data.version}`);
-    assert.equal(adapter.save(snapshot()).status, "writes-disabled");
-    assert.equal(createCareerStorage(fake).save(snapshot()).status, "writes-disabled");
+    assert.deepEqual(await writeSnapshot(adapter, snapshot()), { status: "read-failed", cause: "protected" });
+    assert.deepEqual(await writeSnapshot(createCareerStorage(fake), snapshot()), { status: "read-failed", cause: "protected" });
     assert.equal(fake.values.get(storageKey), raw);
     assert.deepEqual(fake.calls.setItem, []);
   }
 });
 
-test("decimal token protection compares values and handles numeric boundaries", () => {
+test("decimal token protection compares values and handles numeric boundaries", async () => {
   const accepted = [
     "0.1", "1.25", "1.2500", "1e-3", "0.001", "100e-2",
     "-1.2500", "5e-324", "1e-323",
@@ -1015,7 +1054,7 @@ test("decimal token protection compares values and handles numeric boundaries", 
     const adapter = createCareerStorage(fake);
     const result = adapter.load();
     assert.equal(result.status, "loaded", token);
-    assert.equal(adapter.save(result.snapshot).status, "saved", token);
+    assert.equal((await writeSnapshot(adapter, result.snapshot)).status, "saved", token);
   }
   for (const token of protectedTokens) {
     const raw = stored(snapshot({ educationRecords: [{ value: 1 }] }))
@@ -1037,17 +1076,18 @@ test("decimal token protection compares values and handles numeric boundaries", 
   }
 });
 
-test("number-like text in escaped JSON strings is not scanned as numeric tokens", () => {
+test("number-like text in escaped JSON strings is not scanned as numeric tokens", async () => {
   const value = 'Quote: "0.1234567890123456789", slash: \\1e-400, 4e-324';
   const fake = createFakeStorage(stored(snapshot({ educationRecords: [{ value }] })));
   const adapter = createCareerStorage(fake);
   const result = adapter.load();
   assert.equal(result.status, "loaded");
   assert.equal(result.snapshot.educationRecords[0].value, value);
-  assert.equal(adapter.save(result.snapshot).status, "saved");
+  assert.equal((await writeSnapshot(adapter, result.snapshot)).status, "saved");
+  assert.equal(adapter.load().snapshot.educationRecords[0].value, value);
 });
 
-test("fractional precision loss discovered by the final storage check blocks a write", () => {
+test("fractional precision loss discovered by the final storage check blocks a write", async () => {
   const protectedRaw = stored(snapshot({ educationRecords: [{ score: 1 }] }))
     .replace('"score":1', '"score":0.1234567890123456789');
   let raw = stored(snapshot());
@@ -1056,41 +1096,46 @@ test("fractional precision loss discovered by the final storage check blocks a w
   const adapter = createCareerStorage({
     getItem() {
       reads += 1;
-      if (reads === 2) raw = protectedRaw;
+      if (reads === 4) raw = protectedRaw;
       return raw;
     },
     setItem(key, value) { writes += 1; raw = value; }
   });
-  assert.equal(adapter.save(snapshot()).status, "writes-disabled");
+  const result = await writeSnapshot(adapter, snapshot());
+  assert.equal(result.status, "save-failed");
+  assert.equal(result.cause, "writes-disabled");
+  assert.equal(reads, 4);
   assert.equal(raw, protectedRaw);
   assert.equal(writes, 0);
-  assert.equal(adapter.save(snapshot()).status, "writes-disabled");
+  assert.deepEqual(await writeSnapshot(adapter, snapshot()), { status: "read-failed", cause: "protected" });
 });
 
-test("invalid provenance content is rejected by state and storage without writing", () => {
+test("invalid provenance content is rejected by state and storage without writing", async () => {
   for (const provenance of [[undefined], [NaN], [-0], [9007199254740992], [new Date()]]) {
     const data = snapshot();
     data.profile.provenance = provenance;
     const state = createCareerState();
     assert.throws(() => state.restoreSnapshot(data));
     const fake = createFakeStorage();
-    assert.notEqual(createCareerStorage(fake).save(data).status, "saved");
+    const result = await writeSnapshot(createCareerStorage(fake), data);
+    assert.equal(result.status, "save-failed");
+    assert.ok(["invalid-snapshot", "json-fidelity-error"].includes(result.cause));
     assert.deepEqual(fake.calls.setItem, []);
   }
 });
 
-test("safe integers, decimals and numbers inside strings continue to round-trip", () => {
+test("safe integers, decimals and numbers inside strings continue to round-trip", async () => {
   const data = snapshot({ educationRecords: [{ safe: 9007199254740991, decimal: 12.25,
     text: '9007199254740993 \\" -9007199254740993' }] });
   const fake = createFakeStorage(stored(data));
   const storage = createCareerStorage(fake);
   const loaded = storage.load();
   assert.equal(loaded.status, "loaded");
-  assert.equal(storage.save(loaded.snapshot).status, "saved");
+  assert.equal((await writeSnapshot(storage, loaded.snapshot)).status, "saved");
   assert.deepEqual(storage.load().snapshot.educationRecords, data.educationRecords);
 });
 
-test("save rechecks storage immediately before writing", () => {
+test("save rechecks storage immediately before writing", async () => {
   const protectedRaw = storedV2(v2Snapshot({ requirements: [{ score: -0 }] }))
     .replace('"score":0', '"score":-0');
   let raw = stored(snapshot());
@@ -1099,17 +1144,20 @@ test("save rechecks storage immediately before writing", () => {
   const storage = createCareerStorage({
     getItem() {
       reads += 1;
-      if (reads === 2) raw = protectedRaw;
+      if (reads === 4) raw = protectedRaw;
       return raw;
     },
     setItem(key, value) { writes += 1; raw = value; }
   });
-  assert.equal(storage.save(snapshot()).status, "writes-disabled");
+  const result = await writeSnapshot(storage, snapshot());
+  assert.equal(result.status, "save-failed");
+  assert.equal(result.cause, "writes-disabled");
+  assert.equal(reads, 4);
   assert.equal(raw, protectedRaw);
   assert.equal(writes, 0);
 });
 
-test("storage serializes the same detached descriptor values it validates", () => {
+test("storage serializes the same detached descriptor values it validates", async () => {
   const proxy = new Proxy({ value: "original" }, {
     get(target, key, receiver) {
       return key === "value" ? "changed" : Reflect.get(target, key, receiver);
@@ -1118,7 +1166,7 @@ test("storage serializes the same detached descriptor values it validates", () =
   const data = snapshot({ educationRecords: [proxy, { nested: [2, "ordinary"] }] });
   const fake = createFakeStorage();
   const adapter = createCareerStorage(fake);
-  const result = adapter.save(data);
+  const result = await writeSnapshot(adapter, data);
   assert.equal(result.status, "saved");
   assert.deepEqual(JSON.parse(fake.values.get(storageKey)).educationRecords, [
     { value: "original" }, { nested: [2, "ordinary"] }
@@ -1139,8 +1187,8 @@ test("repeated v4 loads preserve records and do not write", () => {
   const fake = createFakeStorage(raw);
   const adapter = createCareerStorage(fake);
 
-  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data });
-  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data });
+  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data, snapshotRevision: 0, careerRevision: 0 });
+  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data, snapshotRevision: 0, careerRevision: 0 });
   assert.deepEqual(fake.calls.setItem, []);
   assert.equal(fake.values.get(storageKey), raw);
 });
@@ -1153,7 +1201,7 @@ test("loads null profile, empty arrays, and unlinked achievements", () => {
   });
   const result = createCareerStorage(createFakeStorage(stored(data))).load();
 
-  assert.deepEqual(result, { status: "loaded", snapshot: data });
+  assert.deepEqual(result, { status: "loaded", snapshot: data, snapshotRevision: 0, careerRevision: 0 });
 });
 
 test("reports invalid JSON as corrupt and preserves the stored value", () => {
@@ -1196,18 +1244,30 @@ test("rejects a non-numeric envelope version as corrupt", () => {
   assert.ok(result.error.errors.some((error) => error.field === "version"));
 });
 
-test("reports a numeric unsupported version distinctly and disables writes", () => {
-  const original = JSON.stringify(envelope(snapshot(), { version: 5 }));
+test("reports a numeric unsupported version distinctly and disables writes", async () => {
+  const original = JSON.stringify(envelope(snapshot(), { version: 6 }));
   const fake = createFakeStorage(original);
   const adapter = createCareerStorage(fake);
   const result = adapter.load();
 
   assert.deepEqual(result, {
     status: "unsupported-version",
-    version: 5,
+    version: 6,
     writesDisabled: true
   });
-  assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
+  const writer = adapter.createWriter({
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
+    initialSnapshot: snapshot(),
+    initialSnapshotRevision: 0,
+    initialCareerRevision: 0,
+    copySnapshot: structuredClone,
+    careerData: (value) => value.profile
+  });
+  assert.deepEqual(await writer.write(0, () => assert.fail("must not prepare")), {
+    status: "read-failed",
+    cause: "unsupported-version"
+  });
   assert.deepEqual(fake.calls.setItem, []);
   assert.equal(fake.values.get(storageKey), original);
 });
@@ -1277,28 +1337,30 @@ test("rejects achievements linked to nonexistent employment", () => {
   ));
 });
 
-test("a throwing getItem returns unavailable without disabling writes", () => {
+test("a throwing getItem returns unavailable without disabling writes", async () => {
   const fake = createFakeStorage();
   fake.getError = new Error("storage unavailable");
   const adapter = createCareerStorage(fake);
 
   assert.equal(adapter.load().status, "unavailable");
   fake.getError = null;
-  assert.equal(adapter.save(snapshot()).status, "saved");
+  assert.equal((await writeSnapshot(adapter, snapshot())).status, "saved");
+  assert.equal(adapter.load().status, "loaded");
 });
 
-test("saves the exact version-4 envelope with one setItem call", () => {
+test("saves the exact version-5 envelope with one setItem call", async () => {
   const fake = createFakeStorage();
   const data = snapshot();
-  const result = createCareerStorage(fake).save(data);
+  const result = await writeSnapshot(createCareerStorage(fake), data);
 
-  assert.deepEqual(result, { status: "saved" });
+  assert.equal(result.status, "saved");
   assert.equal(fake.calls.setItem.length, 1);
   assert.equal(fake.calls.setItem[0][0], storageKey);
   const saved = JSON.parse(fake.calls.setItem[0][1]);
   assert.deepEqual(Object.keys(saved).sort(), [
     "achievementMappings",
     "achievementRecords",
+    "careerRevision",
     "certificationRecords",
     "educationRecords",
     "employmentRecords",
@@ -1307,13 +1369,14 @@ test("saves the exact version-4 envelope with one setItem call", () => {
     "legacyRequirements",
     "profile",
     "requirements",
+    "snapshotRevision",
     "version"
   ]);
-  assert.equal(saved.version, 4);
-  assert.deepEqual(saved, { version: 4, ...data });
+  assert.equal(saved.version, 5);
+  assert.deepEqual(saved, { version: 5, snapshotRevision: 1, careerRevision: 0, ...data });
 });
 
-test("invalid snapshots, duplicate IDs, and invalid links are not written", () => {
+test("invalid snapshots, duplicate IDs, and invalid links are not written", async () => {
   const invalidCases = [
     snapshot({ profile: { id: "incomplete" } }),
     snapshot({
@@ -1326,19 +1389,32 @@ test("invalid snapshots, duplicate IDs, and invalid links are not written", () =
 
   for (const data of invalidCases) {
     const fake = createFakeStorage();
-    const result = createCareerStorage(fake).save(data);
-    assert.equal(result.status, "invalid-snapshot");
+    const adapter = createCareerStorage(fake);
+    const initial = adapter.load();
+    const writer = adapter.createWriter({
+      locks: { request: (name, options, callback) => callback() },
+      secureContext: true,
+      initialSnapshot: initial.snapshot,
+      initialSnapshotRevision: initial.snapshotRevision,
+      initialCareerRevision: initial.careerRevision,
+      copySnapshot: (value) => value,
+      careerData: () => null
+    });
+    const result = await writer.write(0, () => ({ snapshot: data }));
+    assert.equal(result.status, "save-failed");
+    assert.equal(result.cause, "invalid-snapshot");
     assert.deepEqual(fake.calls.setItem, []);
   }
 });
 
-test("rejects lossy model arrays and does not invoke metric getters", () => {
+test("rejects lossy model arrays and does not invoke metric getters", async () => {
   const sparseSkills = new Array(1);
   const sparseData = snapshot({
     profile: profileRecord({ skills: sparseSkills })
   });
-  const sparseResult = createCareerStorage(createFakeStorage()).save(sparseData);
-  assert.equal(sparseResult.status, "invalid-snapshot");
+  const sparseResult = await writeSnapshot(createCareerStorage(createFakeStorage()), sparseData);
+  assert.equal(sparseResult.status, "save-failed");
+  assert.equal(sparseResult.cause, "invalid-snapshot");
 
   let getterCalls = 0;
   const metric = {
@@ -1353,14 +1429,15 @@ test("rejects lossy model arrays and does not invoke metric getters", () => {
       return 10;
     }
   });
-  const getterResult = createCareerStorage(createFakeStorage()).save(snapshot({
+  const getterResult = await writeSnapshot(createCareerStorage(createFakeStorage()), snapshot({
     achievementRecords: [achievementRecord({ metrics: [metric] })]
   }));
-  assert.equal(getterResult.status, "invalid-snapshot");
+  assert.equal(getterResult.status, "save-failed");
+  assert.equal(getterResult.cause, "invalid-snapshot");
   assert.equal(getterCalls, 0);
 });
 
-test("rejects custom-prototype evidence arrays without invoking inherited toJSON", () => {
+test("rejects custom-prototype evidence arrays without invoking inherited toJSON", async () => {
   let toJSONCalls = 0;
   const customPrototype = Object.create(Array.prototype);
   customPrototype.toJSON = function toJSON() {
@@ -1374,14 +1451,14 @@ test("rejects custom-prototype evidence arrays without invoking inherited toJSON
   });
   const adapter = createCareerStorage(createFakeStorage());
 
-  assert.equal(adapter.save(data).status, "json-fidelity-error");
+  assert.equal((await writeSnapshot(adapter, data)).cause, "json-fidelity-error");
   assert.equal(toJSONCalls, 0);
   assert.equal(evidence[0], "original");
   assert.equal(Object.getPrototypeOf(evidence), customPrototype);
-  assert.equal(adapter.save(snapshot()).status, "saved");
+  assert.equal((await writeSnapshot(adapter, snapshot())).status, "saved");
 });
 
-test("rejects custom-prototype model arrays without mutating them", () => {
+test("rejects custom-prototype model arrays without mutating them", async () => {
   const customPrototype = Object.create(Array.prototype);
   customPrototype.toJSON = () => ["transformed"];
   const skills = ["JavaScript"];
@@ -1391,13 +1468,13 @@ test("rejects custom-prototype model arrays without mutating them", () => {
   });
   const adapter = createCareerStorage(createFakeStorage());
 
-  assert.equal(adapter.save(data).status, "invalid-snapshot");
+  assert.equal((await writeSnapshot(adapter, data)).cause, "invalid-snapshot");
   assert.equal(skills[0], "JavaScript");
   assert.equal(Object.getPrototypeOf(skills), customPrototype);
-  assert.equal(adapter.save(snapshot()).status, "saved");
+  assert.equal((await writeSnapshot(adapter, snapshot())).status, "saved");
 });
 
-test("rejects negative-zero metric values before serialization", () => {
+test("rejects negative-zero metric values before serialization", async () => {
   const data = snapshot({
     achievementRecords: [achievementRecord({
       metrics: [{
@@ -1411,8 +1488,9 @@ test("rejects negative-zero metric values before serialization", () => {
   const metric = data.achievementRecords[0].metrics[0];
   const adapter = createCareerStorage(createFakeStorage());
 
-  const result = adapter.save(data);
-  assert.equal(result.status, "invalid-snapshot");
+  const result = await writeSnapshot(adapter, data);
+  assert.equal(result.status, "save-failed");
+  assert.equal(result.cause, "invalid-snapshot");
   assert.ok(result.errors.some((error) =>
     error.recordType === "achievement"
       && error.recordId === "achievement-1"
@@ -1420,10 +1498,10 @@ test("rejects negative-zero metric values before serialization", () => {
       && error.modelField === "value"
   ));
   assert.ok(Object.is(metric.value, -0));
-  assert.equal(adapter.save(snapshot()).status, "saved");
+  assert.equal((await writeSnapshot(adapter, snapshot())).status, "saved");
 });
 
-test("rejects custom-prototype metrics without invoking inherited toJSON", () => {
+test("rejects custom-prototype metrics without invoking inherited toJSON", async () => {
   let toJSONCalls = 0;
   const metricPrototype = Object.create(Object.prototype);
   metricPrototype.toJSON = function toJSON() {
@@ -1441,14 +1519,14 @@ test("rejects custom-prototype metrics without invoking inherited toJSON", () =>
   });
   const adapter = createCareerStorage(createFakeStorage());
 
-  assert.equal(adapter.save(data).status, "invalid-snapshot");
+  assert.equal((await writeSnapshot(adapter, data)).cause, "invalid-snapshot");
   assert.equal(toJSONCalls, 0);
   assert.equal(Object.getPrototypeOf(metric), metricPrototype);
   assert.deepEqual(Object.keys(metric), ["name", "value", "unit", "basis"]);
-  assert.equal(adapter.save(snapshot()).status, "saved");
+  assert.equal((await writeSnapshot(adapter, snapshot())).status, "saved");
 });
 
-test("accepts ordinary and null-prototype metric objects", () => {
+test("accepts ordinary and null-prototype metric objects", async () => {
   const regularMetric = {
     name: "Users",
     value: 20,
@@ -1469,12 +1547,12 @@ test("accepts ordinary and null-prototype metric objects", () => {
     const fake = createFakeStorage();
     const adapter = createCareerStorage(fake);
 
-    assert.equal(adapter.save(data).status, "saved");
+    assert.equal((await writeSnapshot(adapter, data)).status, "saved");
     assert.equal(adapter.load().status, "loaded");
   }
 });
 
-test("handles a metric prototype reflection failure without disabling later saves", () => {
+test("handles a metric prototype reflection failure without disabling later saves", async () => {
   const metric = new Proxy({
     name: "Revenue",
     value: 12,
@@ -1489,18 +1567,19 @@ test("handles a metric prototype reflection failure without disabling later save
     achievementRecords: [achievementRecord({ metrics: [metric] })]
   });
   const adapter = createCareerStorage(createFakeStorage());
-  const result = adapter.save(data);
+  const result = await writeSnapshot(adapter, data);
 
-  assert.equal(result.status, "invalid-snapshot");
+  assert.equal(result.status, "save-failed");
+  assert.equal(result.cause, "invalid-snapshot");
   assert.ok(result.errors.some((error) =>
     error.recordType === "achievement"
       && error.recordId === "achievement-1"
       && /prototype could not be inspected/.test(error.message)
   ));
-  assert.equal(adapter.save(snapshot()).status, "saved");
+  assert.equal((await writeSnapshot(adapter, snapshot())).status, "saved");
 });
 
-test("ordinary model and evidence arrays with valid metrics save and load", () => {
+test("ordinary model and evidence arrays with valid metrics save and load", async () => {
   const data = snapshot({
     achievementRecords: [achievementRecord({
       actions: ["planned"],
@@ -1516,13 +1595,13 @@ test("ordinary model and evidence arrays with valid metrics save and load", () =
   const fake = createFakeStorage();
   const adapter = createCareerStorage(fake);
 
-  assert.equal(adapter.save(data).status, "saved");
+  assert.equal((await writeSnapshot(adapter, data)).status, "saved");
   const loaded = adapter.load();
   assert.equal(loaded.status, "loaded");
   assert.deepEqual(loaded.snapshot, data);
 });
 
-test("version-4 serialization round trip preserves all collections without assessments", () => {
+test("version-5 serialization round trip preserves all collections without assessments", async () => {
   const data = snapshot({
     jobs: [jobRecord()],
     requirements: [requirementRecord()],
@@ -1536,12 +1615,13 @@ test("version-4 serialization round trip preserves all collections without asses
   const fake = createFakeStorage();
   const adapter = createCareerStorage(fake);
 
-  assert.deepEqual(adapter.save(data), { status: "saved" });
+  assert.equal((await writeSnapshot(adapter, data)).status, "saved");
   const envelopeData = JSON.parse(fake.values.get(storageKey));
-  assert.equal(envelopeData.version, 4);
+  assert.equal(envelopeData.version, 5);
   assert.deepEqual(Object.keys(envelopeData).sort(), [
     "achievementMappings",
     "achievementRecords",
+    "careerRevision",
     "certificationRecords",
     "educationRecords",
     "employmentRecords",
@@ -1550,23 +1630,24 @@ test("version-4 serialization round trip preserves all collections without asses
     "legacyRequirements",
     "profile",
     "requirements",
+    "snapshotRevision",
     "version"
   ]);
-  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data });
+  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data, snapshotRevision: 1, careerRevision: 0 });
   assert.equal(Object.hasOwn(envelopeData, "fitAssessment"), false);
 });
 
-test("save does not delete the previous stored value before writing", () => {
+test("save does not delete the previous stored value before writing", async () => {
   const original = stored(snapshot({ profile: null }));
   const fake = createFakeStorage(original);
-  const result = createCareerStorage(fake).save(snapshot());
+  const result = await writeSnapshot(createCareerStorage(fake), snapshot());
 
   assert.equal(result.status, "saved");
   assert.equal(fake.calls.setItem.length, 1);
   assert.notEqual(fake.values.get(storageKey), original);
 });
 
-test("a setItem failure preserves existing data and later save can retry", () => {
+test("a setItem failure preserves existing data and later save can retry", async () => {
   const original = stored(snapshot());
   const fake = createFakeStorage(original);
   const adapter = createCareerStorage(fake);
@@ -1576,27 +1657,27 @@ test("a setItem failure preserves existing data and later save can retry", () =>
   const originalAchievementRecords = data.achievementRecords;
   fake.setError = new Error("quota exceeded");
 
-  assert.equal(adapter.save(data).status, "write-failed");
+  assert.equal((await writeSnapshot(adapter, data)).cause, "write-failed");
   assert.equal(fake.values.get(storageKey), original);
   assert.equal(data.profile, originalProfile);
   assert.equal(data.employmentRecords, originalEmploymentRecords);
   assert.equal(data.achievementRecords, originalAchievementRecords);
   fake.setError = null;
-  assert.equal(adapter.save(data).status, "saved");
+  assert.equal((await writeSnapshot(adapter, data)).status, "saved");
   assert.equal(fake.calls.setItem.length, 2);
 });
 
-test("save after corrupt load is disabled without calling setItem", () => {
+test("save after corrupt load is disabled without calling setItem", async () => {
   const fake = createFakeStorage("invalid json");
   const adapter = createCareerStorage(fake);
 
   assert.equal(adapter.load().status, "corrupt");
-  assert.deepEqual(adapter.save(snapshot()), { status: "writes-disabled" });
+  assert.deepEqual(await writeSnapshot(adapter, snapshot()), { status: "read-failed", cause: "corrupt" });
   assert.deepEqual(fake.calls.setItem, []);
   assert.equal(fake.values.get(storageKey), "invalid json");
 });
 
-test("JSON-safe nested evidence saves and survives loading", () => {
+test("JSON-safe nested evidence saves and survives loading", async () => {
   const data = snapshot({
     achievementRecords: [achievementRecord({
       evidence: ["text", true, null, 3.5, [false], { nested: "value" }]
@@ -1605,11 +1686,11 @@ test("JSON-safe nested evidence saves and survives loading", () => {
   const fake = createFakeStorage();
   const adapter = createCareerStorage(fake);
 
-  assert.equal(adapter.save(data).status, "saved");
+  assert.equal((await writeSnapshot(adapter, data)).status, "saved");
   assert.deepEqual(adapter.load().snapshot, data);
 });
 
-test("rejects undefined, functions, symbols, and BigInt evidence", () => {
+test("rejects undefined, functions, symbols, and BigInt evidence", async () => {
   const unsupported = [undefined, () => {}, Symbol("evidence"), 1n];
   for (const value of unsupported) {
     const fake = createFakeStorage();
@@ -1618,9 +1699,10 @@ test("rejects undefined, functions, symbols, and BigInt evidence", () => {
     });
     const originalEvidence = data.achievementRecords[0].evidence;
     const originalValue = originalEvidence[0].nested;
-    const result = createCareerStorage(fake).save(data);
+    const result = await writeSnapshot(createCareerStorage(fake), data);
 
-    assert.equal(result.status, "json-fidelity-error");
+    assert.equal(result.status, "save-failed");
+    assert.equal(result.cause, "json-fidelity-error");
     assert.ok(result.errors.some((error) =>
       error.recordId === "achievement-1" && error.path.includes("evidence")
     ));
@@ -1630,33 +1712,35 @@ test("rejects undefined, functions, symbols, and BigInt evidence", () => {
   }
 });
 
-test("rejects non-finite and negative-zero evidence numbers", () => {
+test("rejects non-finite and negative-zero evidence numbers", async () => {
   for (const value of [NaN, Infinity, -Infinity, -0]) {
-    const result = createCareerStorage(createFakeStorage()).save(snapshot({
+    const fake = createFakeStorage();
+    const result = await writeSnapshot(createCareerStorage(fake), snapshot({
       achievementRecords: [achievementRecord({ evidence: [value] })]
     }));
-    assert.equal(result.status, "json-fidelity-error");
+    assert.equal(result.cause, "json-fidelity-error");
+    assert.deepEqual(fake.calls.setItem, []);
   }
 });
 
-test("rejects cyclic evidence but allows repeated acyclic references", () => {
+test("rejects cyclic evidence but allows repeated acyclic references", async () => {
   const cyclic = {};
   cyclic.self = cyclic;
   assert.equal(
-    createCareerStorage(createFakeStorage()).save(snapshot({
+    (await writeSnapshot(createCareerStorage(createFakeStorage()), snapshot({
       achievementRecords: [achievementRecord({ evidence: [cyclic] })]
-    })).status,
+    }))).cause,
     "json-fidelity-error"
   );
 
   const shared = { label: "shared" };
-  const result = createCareerStorage(createFakeStorage()).save(snapshot({
+  const result = await writeSnapshot(createCareerStorage(createFakeStorage()), snapshot({
     achievementRecords: [achievementRecord({ evidence: [shared, shared] })]
   }));
   assert.equal(result.status, "saved");
 });
 
-test("rejects sparse arrays, extra array properties, and non-plain objects", () => {
+test("rejects sparse arrays, extra array properties, and non-plain objects", async () => {
   const sparse = [];
   sparse[1] = "present";
   const extra = ["value"];
@@ -1669,14 +1753,14 @@ test("rejects sparse arrays, extra array properties, and non-plain objects", () 
   ];
 
   for (const evidence of cases) {
-    const result = createCareerStorage(createFakeStorage()).save(snapshot({
+    const result = await writeSnapshot(createCareerStorage(createFakeStorage()), snapshot({
       achievementRecords: [achievementRecord({ evidence })]
     }));
-    assert.equal(result.status, "json-fidelity-error");
+    assert.equal(result.cause, "json-fidelity-error");
   }
 });
 
-test("rejects symbol-keyed and non-enumerable evidence properties", () => {
+test("rejects symbol-keyed and non-enumerable evidence properties", async () => {
   const symbolKeyed = { visible: true };
   symbolKeyed[Symbol("hidden")] = "value";
   const nonEnumerable = {};
@@ -1686,14 +1770,14 @@ test("rejects symbol-keyed and non-enumerable evidence properties", () => {
   });
 
   for (const value of [symbolKeyed, nonEnumerable]) {
-    const result = createCareerStorage(createFakeStorage()).save(snapshot({
+    const result = await writeSnapshot(createCareerStorage(createFakeStorage()), snapshot({
       achievementRecords: [achievementRecord({ evidence: [value] })]
     }));
-    assert.equal(result.status, "json-fidelity-error");
+    assert.equal(result.cause, "json-fidelity-error");
   }
 });
 
-test("rejects evidence getters and setters without invoking them", () => {
+test("rejects evidence getters and setters without invoking them", async () => {
   let getterCalls = 0;
   const withGetter = {};
   Object.defineProperty(withGetter, "value", {
@@ -1712,15 +1796,15 @@ test("rejects evidence getters and setters without invoking them", () => {
   });
 
   for (const value of [withGetter, withSetter]) {
-    const result = createCareerStorage(createFakeStorage()).save(snapshot({
+    const result = await writeSnapshot(createCareerStorage(createFakeStorage()), snapshot({
       achievementRecords: [achievementRecord({ evidence: [value] })]
     }));
-    assert.equal(result.status, "json-fidelity-error");
+    assert.equal(result.cause, "json-fidelity-error");
   }
   assert.equal(getterCalls, 0);
 });
 
-test("reflection failures in evidence are reported as fidelity errors", () => {
+test("reflection failures in evidence are reported as fidelity errors", async () => {
   const hostileProxy = new Proxy({}, {
     getPrototypeOf() {
       throw new Error("reflection trap");
@@ -1731,11 +1815,11 @@ test("reflection failures in evidence are reported as fidelity errors", () => {
   });
   const adapter = createCareerStorage(createFakeStorage());
 
-  assert.equal(adapter.save(data).status, "json-fidelity-error");
-  assert.equal(adapter.save(snapshot()).status, "saved");
+  assert.equal((await writeSnapshot(adapter, data)).cause, "json-fidelity-error");
+  assert.equal((await writeSnapshot(adapter, snapshot())).status, "saved");
 });
 
-test("fidelity rejection does not mutate evidence or disable later writes", () => {
+test("fidelity rejection does not mutate evidence or disable later writes", async () => {
   const evidence = [{ safe: "before" }];
   const data = snapshot({
     achievementRecords: [achievementRecord({ evidence })]
@@ -1747,14 +1831,64 @@ test("fidelity rejection does not mutate evidence or disable later writes", () =
   });
   const adapter = createCareerStorage(createFakeStorage());
 
-  assert.equal(adapter.save(data).status, "json-fidelity-error");
+  assert.equal((await writeSnapshot(adapter, data)).cause, "json-fidelity-error");
   assert.equal(evidence[0].safe, "before");
   assert.equal(evidence[0].hidden, "cannot persist");
   delete evidence[0].hidden;
-  assert.equal(adapter.save(data).status, "saved");
+  assert.equal((await writeSnapshot(adapter, data)).status, "saved");
 });
 
 test("factory rejects dependencies without the Storage-like methods", () => {
   assert.throws(() => createCareerStorage(null), TypeError);
   assert.throws(() => createCareerStorage({ getItem() {} }), TypeError);
+});
+
+test("coordinated storage migrates historical snapshots without writing and saves v5", async () => {
+  for (const raw of [
+    JSON.stringify(v1Envelope()),
+    JSON.stringify(v2Envelope()),
+    JSON.stringify(v3Envelope()),
+    JSON.stringify(envelope())
+  ]) {
+    const fake = createFakeStorage(raw);
+    const adapter = createCareerStorage(fake);
+    const loaded = adapter.load();
+    assert.equal(loaded.status, "loaded");
+    assert.equal(loaded.snapshotRevision, 0);
+    assert.equal(loaded.careerRevision, 0);
+    assert.equal(fake.values.get(storageKey), raw);
+    let locked = false;
+    const writer = adapter.createWriter({
+      locks: { request: async (name, options, callback) => {
+        locked = true;
+        try { return await callback(); } finally { locked = false; }
+      } },
+      secureContext: true,
+      initialSnapshot: loaded.snapshot,
+      initialSnapshotRevision: 0,
+      initialCareerRevision: 0,
+      copySnapshot: structuredClone,
+      careerData: (value) => value.profile
+    });
+    const setItem = fake.setItem.bind(fake);
+    fake.setItem = (key, value) => {
+      assert.equal(locked, true);
+      setItem(key, value);
+    };
+    assert.equal(adapter.save, undefined);
+    const result = await writer.write(0, (value) => ({ snapshot: value, forceWrite: true }));
+    assert.equal(result.status, "saved");
+    const saved = JSON.parse(fake.values.get(storageKey));
+    assert.equal(saved.version, 5);
+    assert.equal(saved.snapshotRevision, 1);
+    assert.equal(saved.careerRevision, 0);
+    assert.deepEqual(adapter.load().snapshot, loaded.snapshot);
+  }
+});
+
+test("coordinated storage rejects invalid v5 counters without replacing bytes", () => {
+  const raw = JSON.stringify({ ...envelope(), version: 5, snapshotRevision: 1, careerRevision: 2 });
+  const fake = createFakeStorage(raw);
+  assert.equal(createCareerStorage(fake).load().status, "corrupt");
+  assert.equal(fake.values.get(storageKey), raw);
 });

@@ -21,7 +21,8 @@ export function createNavigationController({
   window,
   dialogManager,
   views,
-  navigateTo
+  navigateTo,
+  isNavigationBlocked = () => false
 } = {}) {
   if (
     !window
@@ -57,6 +58,8 @@ export function createNavigationController({
   }
 
   function applyNavigation(index, href) {
+    const originIndex = currentIndex;
+    const originHref = currentHref;
     currentIndex = index;
     currentHref = href;
 
@@ -68,6 +71,23 @@ export function createNavigationController({
         return;
       }
       restoringNavigation = null;
+    }
+
+    if (isNavigationBlocked()) {
+      if (index === originIndex) {
+        history.replaceState(withNavigationIndex(history.state, originIndex), "", originHref);
+        currentHref = originHref;
+        pendingNavigation = null;
+        return;
+      }
+      pendingNavigation = {
+        originIndex,
+        destinationIndex: index,
+        destinationHref: href,
+        viewName: getViewName(window.location, views)
+      };
+      continueEditing();
+      return;
     }
 
     if (dialogManager.isOpen()) {
@@ -134,7 +154,7 @@ export function createNavigationController({
   }
 
   function navigate(viewName) {
-    if (!Object.hasOwn(views, viewName)) {
+    if (isNavigationBlocked() || !Object.hasOwn(views, viewName)) {
       return false;
     }
 
@@ -153,6 +173,23 @@ export function createNavigationController({
     return true;
   }
 
+  function continueEditing() {
+    if (!pendingNavigation) {
+      return;
+    }
+
+    const { originIndex, destinationIndex } = pendingNavigation;
+    const distance = originIndex - destinationIndex;
+    if (distance === 0) {
+      pendingNavigation = null;
+      dialogEntryIndex = currentIndex;
+      return;
+    }
+
+    restoringNavigation = { targetIndex: originIndex };
+    history.go(distance);
+  }
+
   return {
     start,
     navigate,
@@ -160,22 +197,7 @@ export function createNavigationController({
       dialogEntryIndex = currentIndex;
       pendingNavigation = null;
     },
-    continueEditing() {
-      if (!pendingNavigation) {
-        return;
-      }
-
-      const { originIndex, destinationIndex } = pendingNavigation;
-      const distance = originIndex - destinationIndex;
-      if (distance === 0) {
-        pendingNavigation = null;
-        dialogEntryIndex = currentIndex;
-        return;
-      }
-
-      restoringNavigation = { targetIndex: originIndex };
-      history.go(distance);
-    },
+    continueEditing,
     discardAndNavigate() {
       if (!pendingNavigation) {
         return;

@@ -134,24 +134,29 @@ test("decisions validate details and failures do not partially change state", ()
   assert.equal(updated.reviewDecisions.length, 1);
 });
 
-test("persistence outcomes and reload preserve pending session data", () => {
+test("persistence outcomes and reload preserve pending session data", async () => {
   let raw = null;
   let fail = false;
   const storage = {
     getItem: () => raw,
     setItem(key, value) { if (fail) throw new Error("write failed"); raw = value; }
   };
-  const persistence = createCareerPersistence(storage);
-  persistence.state.createImportSession(session());
-  assert.equal(persistence.getMutationSaveOutcome(), "saved");
-  persistence.state.addImportCandidates("session", [candidate()], start);
-  assert.equal(persistence.getMutationSaveOutcome(), "saved");
+  const persistence = createCareerPersistence(storage, {
+    locks: { request: (name, options, callback) => callback() }, secureContext: true
+  });
+  const create = persistence.state.createImportSession(session());
+  await create;
+  assert.equal(await persistence.getOperationOutcome(create), "saved");
+  const add = persistence.state.addImportCandidates("session", [candidate()], start);
+  await add;
+  assert.equal(await persistence.getOperationOutcome(add), "saved");
   const reload = createCareerPersistence(storage);
   assert.equal(reload.state.getImportSession("session").candidates[0].reviewStatus, "pending");
   fail = true;
-  persistence.state.transitionImportSession("session", "failed", later);
-  assert.equal(persistence.getMutationSaveOutcome(), "write-failed");
+  const transition = persistence.state.transitionImportSession("session", "failed", later);
+  await assert.rejects(transition, (error) => error.status === "save-failed");
+  assert.equal(await persistence.getOperationOutcome(transition), "save-failed");
   assert.equal(persistence.getStatus().transientWarning.kind, "write-failed");
-  assert.equal(persistence.state.getImportSession("session").status, "failed");
+  assert.equal(persistence.state.getImportSession("session").status, "processing");
   assert.equal(createCareerPersistence(storage).state.getImportSession("session").status, "processing");
 });
