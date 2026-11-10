@@ -85,6 +85,46 @@ Both `index.html` and `validation-demo.html` load JavaScript ES modules. Serve
 the pages over HTTP rather than opening the HTML files directly from the
 filesystem.
 
+### Local backend foundation
+
+The backend is a separate, local-only FastAPI foundation; it does not yet
+upload or process CVs. Use Python 3.11 or later:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python -m pip install -r backend\requirements-dev.txt
+.\.venv\Scripts\python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8001 --no-access-log
+```
+
+On other platforms, use `python3 -m venv .venv` and the Python executable at
+`.venv/bin/python`. The default temporary directory is `careerpilot` under
+the system temporary directory. To override it, set `CAREERPILOT_TEMP_DIR`
+to an absolute directory outside the repository, which is served as the
+frontend tree. For example, in PowerShell:
+
+```powershell
+$env:CAREERPILOT_TEMP_DIR = Join-Path $env:TEMP "careerpilot"
+```
+
+Restart the backend after changing configuration. `GET /health` returns
+HTTP 200 with `{"status":"ok"}`. `POST /api/imports` returns HTTP 501 with
+`{"detail":"CV import is not implemented."}`; it does not parse or store
+request contents. The temporary-storage utility is not connected to this
+route. It provides explicit cleanup of files created by the same utility
+instance, not durable cleanup or a 24-hour deletion guarantee.
+
+Run backend tests from the project root:
+
+```powershell
+.\.venv\Scripts\python -m pytest backend\tests
+```
+
+Run existing frontend tests with `npm test`. The backend is intended for
+local development only; it has no authentication or public deployment
+protections. Do not expose it to a network or use real CVs with this
+foundation. The startup command disables access logging so request URLs are
+not recorded by Uvicorn.
+
 ## Project Structure
 
 The intended structure is:
