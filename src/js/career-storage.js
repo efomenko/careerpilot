@@ -7,9 +7,10 @@ import { addProvenanceErrors } from "./provenance-model.js";
 import { validateJobRecord } from "./job-model.js";
 import { validateRequirementRecord } from "./requirement-model.js";
 import { createSnapshotWriter } from "./snapshot-writer.js";
+import { validateApprovalReceipt } from "./approval-receipt.js";
 
 const STORAGE_KEY = "careerpilot.state";
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const v1SnapshotFields = ["profile", "employmentRecords", "achievementRecords"];
 const v2SnapshotFields = [
   ...v1SnapshotFields,
@@ -29,6 +30,7 @@ const v4SnapshotFields = [
   "import"
 ];
 const importContainerFields = ["sessions", "completedBatches", "importReports"];
+const v6ImportContainerFields = [...importContainerFields, "approvalReceipts"];
 
 function snapshotFieldsForVersion(version) {
   if (version === 1) {
@@ -40,7 +42,7 @@ function snapshotFieldsForVersion(version) {
   if (version === 3) {
     return v3SnapshotFields;
   }
-  if (version === 4 || version === 5) {
+  if (version === 4 || version === 5 || version === 6) {
     return v4SnapshotFields;
   }
   return [];
@@ -60,7 +62,8 @@ function emptySnapshot() {
     import: {
       sessions: [],
       completedBatches: [],
-      importReports: []
+      importReports: [],
+      approvalReceipts: []
     }
   };
 }
@@ -920,7 +923,8 @@ function validateContainerArray(value, field, errors) {
   }
 }
 
-function validateV4Containers(snapshot, errors) {
+function validateV4Containers(snapshot, errors, version) {
+  const containerFields = version === 6 ? v6ImportContainerFields : importContainerFields;
   validateContainerArray(snapshot.educationRecords, "educationRecords", errors);
   validateContainerArray(snapshot.certificationRecords, "certificationRecords", errors);
 
@@ -957,7 +961,7 @@ function validateV4Containers(snapshot, errors) {
     return;
   }
   for (const key of keys) {
-    if (typeof key !== "string" || !importContainerFields.includes(key)) {
+    if (typeof key !== "string" || !containerFields.includes(key)) {
       addError(errors, {
         field: `import.${String(key)}`,
         path: `import.${String(key)}`,
@@ -965,7 +969,7 @@ function validateV4Containers(snapshot, errors) {
       });
     }
   }
-  for (const field of importContainerFields) {
+  for (const field of containerFields) {
     let descriptor;
     try {
       descriptor = Object.getOwnPropertyDescriptor(importValue, field);
@@ -993,7 +997,33 @@ function validateV4Containers(snapshot, errors) {
       });
     } else {
       validateContainerArray(descriptor.value, `import.${field}`, errors);
+      if (field === "approvalReceipts") {
+        if (!isJsonCompatibleReceiptArray(descriptor.value)) {
+          addError(errors, {
+            field: "import.approvalReceipts",
+            path: "import.approvalReceipts",
+            message: "Approval receipts must contain valid, unique receipts."
+          });
+        }
+      }
     }
+  }
+}
+
+function isJsonCompatibleReceiptArray(receipts) {
+  try {
+    if (!Array.isArray(receipts)) return false;
+    const detached = copyValidatedJson(receipts);
+    const keys = new Set();
+    return detached.every((receipt) => {
+      if (!validateApprovalReceipt(receipt)) return false;
+      const key = JSON.stringify([receipt.sessionId, receipt.candidateId]);
+      if (keys.has(key)) return false;
+      keys.add(key);
+      return true;
+    });
+  } catch {
+    return false;
   }
 }
 
@@ -1047,7 +1077,7 @@ function migrateV3ToV4(snapshot) {
   };
 }
 
-function validateSnapshot(snapshot, version = 4) {
+function validateSnapshot(snapshot, version = 6) {
   const errors = [];
   const fields = snapshotFieldsForVersion(version);
   let snapshotIsPlainObject = false;
@@ -1137,7 +1167,7 @@ function validateSnapshot(snapshot, version = 4) {
           "legacyRequirements"
         )?.value;
       }
-      if (version === 4) {
+      if (version >= 4) {
         educationRecords = Object.getOwnPropertyDescriptor(
           snapshot,
           "educationRecords"
@@ -1200,7 +1230,7 @@ function validateSnapshot(snapshot, version = 4) {
     employmentRecords,
     "employmentRecords",
     "employment",
-    version === 4 ? validateV4EmploymentRecord : validateHistoricalEmploymentRecord,
+    version >= 4 ? validateV4EmploymentRecord : validateHistoricalEmploymentRecord,
     errors
   );
   const validAchievementRecords = validateRecordArray(
@@ -1210,8 +1240,8 @@ function validateSnapshot(snapshot, version = 4) {
     validateV4AchievementRecord,
     errors
   );
-  if (version === 4) {
-    validateV4Containers(snapshot, errors);
+  if (version >= 4) {
+    validateV4Containers(snapshot, errors, version);
   }
   const validJobs = version >= 2
     ? validateRecordArray(jobs, "jobs", "job", validateJobRecord, errors)
@@ -1289,7 +1319,7 @@ function validateSnapshot(snapshot, version = 4) {
           : requirements,
         ...(version >= 3 ? { legacyRequirements } : {}),
         achievementMappings,
-        ...(version === 4 ? {
+        ...(version >= 4 ? {
           educationRecords,
           certificationRecords,
           import: importValue
@@ -1486,7 +1516,7 @@ function validateEnvelope(envelope, version) {
   }
 
   const fields = snapshotFieldsForVersion(version);
-  const envelopeFields = ["version", ...(version === 5 ? ["snapshotRevision", "careerRevision"] : []), ...fields];
+  const envelopeFields = ["version", ...(version >= 5 ? ["snapshotRevision", "careerRevision"] : []), ...fields];
   const expected = new Set(envelopeFields);
   for (const key of keys) {
     if (typeof key !== "string" || !expected.has(key)) {
@@ -1513,7 +1543,7 @@ function validateEnvelope(envelope, version) {
           message: "Stored envelope properties must be enumerable data properties."
         });
       }
-      if (version === 5) {
+      if (version >= 5) {
         const snapshotRevision = Object.getOwnPropertyDescriptor(envelope, "snapshotRevision")?.value;
         const careerRevision = Object.getOwnPropertyDescriptor(envelope, "careerRevision")?.value;
         if (![snapshotRevision, careerRevision].every((value) => Number.isSafeInteger(value) && value >= 0)
@@ -1616,10 +1646,9 @@ function numericTokenProtectionReason(raw) {
  * Public API:
  * - load(): return `missing`, `loaded`, `protected`, `corrupt`, `unsupported-version`, or
  *   `unavailable`, with a validated snapshot where applicable.
- * - save(snapshot): validate and persist the complete version-4 envelope,
- *   returning a status result.
+ * - createWriter(options): create the coordinated writer for complete v6 snapshots.
  *
- * Valid historical snapshots are sequentially migrated in memory to version 4.
+ * Valid historical snapshots are migrated in memory to version 6.
  * Loading never writes storage; corrupt or unsupported data disables writes for
  * this adapter instance. Each save rechecks stored data. Historical negative
  * zero and unsafe raw numeric tokens disable writes to prevent lossy replacement.
@@ -1747,7 +1776,7 @@ export function createCareerStorage(storage) {
           writesDisabled: true
         };
       }
-      if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5) {
+      if (version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) {
         writesDisabled = true;
         return { status: "unsupported-version", version, writesDisabled: true };
       }
@@ -1868,9 +1897,13 @@ export function createCareerStorage(storage) {
       if (version >= 4) {
         return {
           status: "loaded",
-          snapshot: v3Validation.snapshot,
-          snapshotRevision: version === 5 ? envelope.snapshotRevision : 0,
-          careerRevision: version === 5 ? envelope.careerRevision : 0
+          snapshot: version === 6 ? v3Validation.snapshot : {
+            ...v3Validation.snapshot,
+            import: { ...v3Validation.snapshot.import, approvalReceipts: [] }
+          },
+          snapshotRevision: version >= 5 ? envelope.snapshotRevision : 0,
+          careerRevision: version >= 5 ? envelope.careerRevision : 0,
+          ...(version < 6 ? { needsMigration: true } : {})
         };
       }
 
@@ -1907,11 +1940,12 @@ export function createCareerStorage(storage) {
         };
       }
 
+      finalValidation.snapshot.import.approvalReceipts = [];
       if (historicalNegativeZero) {
         writesDisabled = true;
-        return { status: "loaded", snapshot: finalValidation.snapshot, snapshotRevision: 0, careerRevision: 0, writesDisabled: true };
+        return { status: "loaded", snapshot: finalValidation.snapshot, snapshotRevision: 0, careerRevision: 0, writesDisabled: true, needsMigration: true };
       }
-      return { status: "loaded", snapshot: finalValidation.snapshot, snapshotRevision: 0, careerRevision: 0 };
+      return { status: "loaded", snapshot: finalValidation.snapshot, snapshotRevision: 0, careerRevision: 0, needsMigration: true };
   }
   function validateForSave(snapshot) {
       const validation = validateSnapshot(snapshot);

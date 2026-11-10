@@ -97,7 +97,8 @@ function snapshot(overrides = {}) {
     import: {
       sessions: [],
       completedBatches: [],
-      importReports: []
+      importReports: [],
+      approvalReceipts: []
     },
     ...overrides
   };
@@ -108,7 +109,7 @@ function snapshot(overrides = {}) {
   const structuredDate = (date) => typeof date === "string"
     ? { value: date, precision: "day" }
     : date;
-  return {
+  const result = {
     ...data,
     profile: data.profile === null ? null : addProvenance(data.profile),
     employmentRecords: data.employmentRecords.map((record) => addProvenance({
@@ -118,6 +119,12 @@ function snapshot(overrides = {}) {
     })),
     achievementRecords: data.achievementRecords.map(addProvenance)
   };
+  if (result.import && Object.hasOwn(result.import, "sessions")
+    && Object.hasOwn(result.import, "completedBatches") && Object.hasOwn(result.import, "importReports")
+    && !Object.hasOwn(result.import, "approvalReceipts")) {
+    result.import = { ...result.import, approvalReceipts: [] };
+  }
+  return result;
 }
 
 function v2Snapshot(overrides = {}) {
@@ -171,7 +178,8 @@ function v3Snapshot(overrides = {}) {
 }
 
 function envelope(value = snapshot(), overrides = {}) {
-  return { version: 4, ...value, ...overrides };
+  const { approvalReceipts, ...legacyImport } = value.import;
+  return { version: 4, ...value, import: legacyImport, ...overrides };
 }
 
 function v3Envelope(value = v3Snapshot(), overrides = {}) {
@@ -534,8 +542,8 @@ test("migrates populated version-1 snapshots through version 5", async () => {
   fake.setError = null;
   assert.equal((await writeSnapshot(adapter, result.snapshot)).status, "saved");
   const saved = JSON.parse(fake.values.get(storageKey));
-  assert.equal(saved.version, 5);
-  assert.deepEqual(saved, { version: 5, snapshotRevision: 1, careerRevision: 0, ...result.snapshot });
+  assert.equal(saved.version, 6);
+  assert.deepEqual(saved, { version: 6, snapshotRevision: 1, careerRevision: 0, ...result.snapshot });
 });
 
 test("rejects malformed version-1 snapshots during migration", async () => {
@@ -1187,8 +1195,8 @@ test("repeated v4 loads preserve records and do not write", () => {
   const fake = createFakeStorage(raw);
   const adapter = createCareerStorage(fake);
 
-  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data, snapshotRevision: 0, careerRevision: 0 });
-  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data, snapshotRevision: 0, careerRevision: 0 });
+  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data, snapshotRevision: 0, careerRevision: 0, needsMigration: true });
+  assert.deepEqual(adapter.load(), { status: "loaded", snapshot: data, snapshotRevision: 0, careerRevision: 0, needsMigration: true });
   assert.deepEqual(fake.calls.setItem, []);
   assert.equal(fake.values.get(storageKey), raw);
 });
@@ -1201,7 +1209,7 @@ test("loads null profile, empty arrays, and unlinked achievements", () => {
   });
   const result = createCareerStorage(createFakeStorage(stored(data))).load();
 
-  assert.deepEqual(result, { status: "loaded", snapshot: data, snapshotRevision: 0, careerRevision: 0 });
+  assert.deepEqual(result, { status: "loaded", snapshot: data, snapshotRevision: 0, careerRevision: 0, needsMigration: true });
 });
 
 test("reports invalid JSON as corrupt and preserves the stored value", () => {
@@ -1245,14 +1253,14 @@ test("rejects a non-numeric envelope version as corrupt", () => {
 });
 
 test("reports a numeric unsupported version distinctly and disables writes", async () => {
-  const original = JSON.stringify(envelope(snapshot(), { version: 6 }));
+  const original = JSON.stringify(envelope(snapshot(), { version: 7 }));
   const fake = createFakeStorage(original);
   const adapter = createCareerStorage(fake);
   const result = adapter.load();
 
   assert.deepEqual(result, {
     status: "unsupported-version",
-    version: 6,
+    version: 7,
     writesDisabled: true
   });
   const writer = adapter.createWriter({
@@ -1372,8 +1380,8 @@ test("saves the exact version-5 envelope with one setItem call", async () => {
     "snapshotRevision",
     "version"
   ]);
-  assert.equal(saved.version, 5);
-  assert.deepEqual(saved, { version: 5, snapshotRevision: 1, careerRevision: 0, ...data });
+  assert.equal(saved.version, 6);
+  assert.deepEqual(saved, { version: 6, snapshotRevision: 1, careerRevision: 0, ...data });
 });
 
 test("invalid snapshots, duplicate IDs, and invalid links are not written", async () => {
@@ -1617,7 +1625,7 @@ test("version-5 serialization round trip preserves all collections without asses
 
   assert.equal((await writeSnapshot(adapter, data)).status, "saved");
   const envelopeData = JSON.parse(fake.values.get(storageKey));
-  assert.equal(envelopeData.version, 5);
+  assert.equal(envelopeData.version, 6);
   assert.deepEqual(Object.keys(envelopeData).sort(), [
     "achievementMappings",
     "achievementRecords",
@@ -1843,7 +1851,7 @@ test("factory rejects dependencies without the Storage-like methods", () => {
   assert.throws(() => createCareerStorage({ getItem() {} }), TypeError);
 });
 
-test("coordinated storage migrates historical snapshots without writing and saves v5", async () => {
+test("coordinated storage migrates historical snapshots without writing and saves v6", async () => {
   for (const raw of [
     JSON.stringify(v1Envelope()),
     JSON.stringify(v2Envelope()),
@@ -1876,14 +1884,236 @@ test("coordinated storage migrates historical snapshots without writing and save
       setItem(key, value);
     };
     assert.equal(adapter.save, undefined);
-    const result = await writer.write(0, (value) => ({ snapshot: value, forceWrite: true }));
+    const result = await writer.write(0, (value) => ({ snapshot: value }));
     assert.equal(result.status, "saved");
     const saved = JSON.parse(fake.values.get(storageKey));
-    assert.equal(saved.version, 5);
+    assert.equal(saved.version, 6);
     assert.equal(saved.snapshotRevision, 1);
     assert.equal(saved.careerRevision, 0);
     assert.deepEqual(adapter.load().snapshot, loaded.snapshot);
   }
+});
+
+function receipt(overrides = {}) {
+  return {
+    sessionId: "session-1",
+    candidateId: "candidate-1",
+    reviewed: {
+      category: "skill",
+      reviewedData: { value: "JavaScript" },
+      fieldProvenance: {},
+      validation: { status: "valid", errors: [], warnings: [] }
+    },
+    decision: { candidateId: "candidate-1", action: "add" },
+    acknowledgedWarnings: false,
+    careerRevision: 3,
+    approvedAt: "2025-04-20T14:30:00.000Z",
+    expiresAt: "2025-04-27T14:30:00.000Z",
+    target: null,
+    ...overrides
+  };
+}
+
+test("v5 migration preserves opaque import data and revisions without creating receipts or writing", async () => {
+  const data = snapshot({
+    import: {
+      sessions: [{ id: "legacy", reviewDecisions: [{ action: "add" }] }, null],
+      completedBatches: [{ unusual: ["keep", 4] }, null],
+      importReports: [{ arbitrary: { payload: true } }]
+    }
+  });
+  const { approvalReceipts, ...oldImport } = data.import;
+  const raw = JSON.stringify({ version: 5, snapshotRevision: 8, careerRevision: 3, ...data, import: oldImport });
+  const fake = createFakeStorage(raw);
+  const adapter = createCareerStorage(fake);
+  const loaded = adapter.load();
+  assert.equal(loaded.status, "loaded");
+  assert.equal(loaded.needsMigration, true);
+  assert.deepEqual(loaded.snapshot, data);
+  assert.deepEqual(loaded.snapshot.import.approvalReceipts, []);
+  assert.equal(loaded.snapshotRevision, 8);
+  assert.equal(loaded.careerRevision, 3);
+  assert.equal(fake.values.get(storageKey), raw);
+  assert.equal(fake.calls.setItem.length, 0);
+
+  let locked = false;
+  const writer = adapter.createWriter({
+    locks: { request: async (name, options, callback) => {
+      assert.equal(name, "careerpilot.snapshot");
+      assert.equal(options.mode, "exclusive");
+      locked = true;
+      try { return await callback(); } finally { locked = false; }
+    } },
+    secureContext: true,
+    initialSnapshot: loaded.snapshot,
+    initialSnapshotRevision: 8,
+    initialCareerRevision: 3,
+    copySnapshot: structuredClone,
+    careerData: (value) => value.profile
+  });
+  const originalSet = fake.setItem.bind(fake);
+  fake.setItem = (key, value) => { assert.equal(locked, true); originalSet(key, value); };
+  assert.equal((await writer.write(8, (snapshot) => ({ snapshot }))).status, "saved");
+  assert.deepEqual(writer.getRevisions(), { snapshotRevision: 9, careerRevision: 3 });
+  assert.deepEqual(JSON.parse(fake.values.get(storageKey)), {
+    version: 6, snapshotRevision: 9, careerRevision: 3, ...data
+  });
+  assert.equal((await writer.write(9, (snapshot) => ({ snapshot }))).status, "unchanged");
+  assert.equal(fake.calls.setItem.length, 1);
+});
+
+test("v6 receipt-only write advances snapshot revision and round-trips valid receipts", async () => {
+  const fake = createFakeStorage();
+  const adapter = createCareerStorage(fake);
+  const initial = adapter.load();
+  const writer = adapter.createWriter({
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
+    initialSnapshot: initial.snapshot,
+    initialSnapshotRevision: 0,
+    initialCareerRevision: 0,
+    copySnapshot: structuredClone,
+    careerData: (value) => value.profile
+  });
+  const addition = receipt({ careerRevision: 0 });
+  const result = await writer.write(0, (snapshot) => {
+    snapshot.import.approvalReceipts.push(addition);
+    return { snapshot };
+  });
+  assert.equal(result.status, "saved");
+  assert.deepEqual(writer.getRevisions(), { snapshotRevision: 1, careerRevision: 0 });
+  assert.deepEqual(adapter.load().snapshot.import.approvalReceipts, [addition]);
+  assert.equal(JSON.parse(fake.values.get(storageKey)).version, 6);
+});
+
+test("v6 accepts a complete merge receipt with acknowledged warnings and target state", async () => {
+  const reviewed = receipt().reviewed;
+  reviewed.validation = { status: "warning", errors: [], warnings: [{ code: "W", message: "Warning" }] };
+  const merge = receipt({
+    reviewed,
+    decision: { candidateId: "candidate-1", action: "merge", targetRecordId: "profile-1", fieldChoices: { skills: "reviewed" } },
+    acknowledgedWarnings: true,
+    target: { category: "profile", id: "profile-1", record: profileRecord({ provenance: [] }) }
+  });
+  const data = snapshot();
+  data.import.approvalReceipts.push(merge);
+  const fake = createFakeStorage();
+  const adapter = createCareerStorage(fake);
+  assert.equal((await writeSnapshot(adapter, data)).status, "saved");
+  assert.deepEqual(adapter.load().snapshot.import.approvalReceipts, [merge]);
+});
+
+test("v6 rejects malformed or duplicate receipts and malformed containers without replacing bytes", async () => {
+  const good = receipt();
+  const warning = structuredClone(good);
+  warning.reviewed.validation = { status: "warning", errors: [], warnings: [{ code: "W", message: "Warning" }] };
+  const invalidImports = [
+    { ...snapshot().import, approvalReceipts: null },
+    { ...snapshot().import, approvalReceipts: [{}] },
+    { ...snapshot().import, approvalReceipts: [good, good] },
+    { ...snapshot().import, approvalReceipts: [warning] },
+    { ...snapshot().import, approvalReceipts: [receipt({ decision: { candidateId: "other", action: "add" } })] },
+    { ...snapshot().import, approvalReceipts: [receipt({ expiresAt: "2025-04-20T14:30:00.000Z" })] },
+    { ...snapshot().import, approvalReceipts: [receipt({ careerRevision: -1 })] },
+    { ...snapshot().import, extra: [] }
+  ];
+  for (const importData of invalidImports) {
+    const raw = JSON.stringify({ version: 6, snapshotRevision: 5, careerRevision: 3, ...snapshot(), import: importData });
+    const fake = createFakeStorage(raw);
+    const adapter = createCareerStorage(fake);
+    assert.equal(adapter.load().status, "corrupt");
+    assert.equal(fake.values.get(storageKey), raw);
+    assert.equal(fake.calls.setItem.length, 0);
+  }
+  const { approvalReceipts, ...oldImport } = snapshot().import;
+  const missing = JSON.stringify({ version: 6, snapshotRevision: 5, careerRevision: 3, ...snapshot(), import: oldImport });
+  assert.equal(createCareerStorage(createFakeStorage(missing)).load().status, "corrupt");
+  const invalidV5 = JSON.stringify({ version: 5, snapshotRevision: 5, careerRevision: 3, ...snapshot() });
+  assert.equal(createCareerStorage(createFakeStorage(invalidV5)).load().status, "corrupt");
+});
+
+test("v6 receipt validation rejects accessors without invoking them", async () => {
+  let calls = 0;
+  const item = receipt();
+  Object.defineProperty(item, "sessionId", { enumerable: true, get() { calls += 1; return "session-1"; } });
+  const data = snapshot();
+  data.import.approvalReceipts.push(item);
+  const fake = createFakeStorage();
+  const result = await writeSnapshot(createCareerStorage(fake), data);
+  assert.equal(result.status, "save-failed");
+  assert.equal(calls, 0);
+  assert.equal(fake.values.has(storageKey), false);
+});
+
+test("migration fails closed without a lock", async () => {
+  const raw = JSON.stringify({ ...envelope(), version: 5, snapshotRevision: 8, careerRevision: 3 });
+  const fake = createFakeStorage(raw);
+  const adapter = createCareerStorage(fake);
+  const initial = adapter.load();
+  const writer = adapter.createWriter({
+    locks: undefined,
+    secureContext: true,
+    initialSnapshot: initial.snapshot,
+    initialSnapshotRevision: 8,
+    initialCareerRevision: 3,
+    copySnapshot: structuredClone,
+    careerData: (value) => value.profile
+  });
+  assert.equal((await writer.write(8, (snapshot) => ({ snapshot }))).status, "coordination-unavailable");
+  assert.equal(fake.values.get(storageKey), raw);
+  assert.deepEqual(writer.getSnapshot(), initial.snapshot);
+  assert.equal(fake.calls.setItem.length, 0);
+});
+
+test("migration write failure keeps v5 bytes and published state unchanged", async () => {
+  const raw = JSON.stringify({ ...envelope(), version: 5, snapshotRevision: 8, careerRevision: 3 });
+  const fake = createFakeStorage(raw);
+  const adapter = createCareerStorage(fake);
+  const initial = adapter.load();
+  fake.setError = new Error("quota");
+  const writer = adapter.createWriter({
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
+    initialSnapshot: initial.snapshot,
+    initialSnapshotRevision: 8,
+    initialCareerRevision: 3,
+    copySnapshot: structuredClone,
+    careerData: (value) => value.profile
+  });
+  assert.equal((await writer.write(8, (snapshot) => ({ snapshot }))).status, "save-failed");
+  assert.equal(fake.values.get(storageKey), raw);
+  assert.deepEqual(writer.getSnapshot(), initial.snapshot);
+  assert.deepEqual(writer.getRevisions(), { snapshotRevision: 8, careerRevision: 3 });
+  fake.setError = null;
+  assert.equal((await writer.write(8, (snapshot) => ({ snapshot }))).status, "saved");
+});
+
+test("a stale migration leaves newer bytes and the published snapshot untouched", async () => {
+  const raw = JSON.stringify({ ...envelope(), version: 5, snapshotRevision: 8, careerRevision: 3 });
+  const fake = createFakeStorage(raw);
+  const adapter = createCareerStorage(fake);
+  const initial = adapter.load();
+  const writer = adapter.createWriter({
+    locks: { request: (name, options, callback) => callback() },
+    secureContext: true,
+    initialSnapshot: initial.snapshot,
+    initialSnapshotRevision: 8,
+    initialCareerRevision: 3,
+    copySnapshot: structuredClone,
+    careerData: (value) => value.profile
+  });
+  const newer = JSON.stringify({ ...envelope(), version: 5, snapshotRevision: 9, careerRevision: 3 });
+  fake.values.set(storageKey, newer);
+  let prepared = false;
+  assert.equal((await writer.write(8, (snapshot) => {
+    prepared = true;
+    return { snapshot };
+  })).status, "stale");
+  assert.equal(prepared, false);
+  assert.equal(fake.values.get(storageKey), newer);
+  assert.deepEqual(writer.getSnapshot(), initial.snapshot);
+  assert.deepEqual(writer.getRevisions(), { snapshotRevision: 8, careerRevision: 3 });
+  assert.equal(fake.calls.setItem.length, 0);
 });
 
 test("coordinated storage rejects invalid v5 counters without replacing bytes", () => {

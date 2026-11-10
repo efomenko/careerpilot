@@ -162,7 +162,7 @@ function emptySnapshot(overrides = {}) {
     achievementMappings: [],
     educationRecords: [],
     certificationRecords: [],
-    import: { sessions: [], completedBatches: [], importReports: [] },
+    import: { sessions: [], completedBatches: [], importReports: [], approvalReceipts: [] },
     ...overrides
   };
 }
@@ -180,7 +180,7 @@ function completeSnapshot(overrides = {}) {
     achievementMappings: [],
     educationRecords: [],
     certificationRecords: [],
-    import: { sessions: [], completedBatches: [], importReports: [] },
+    import: { sessions: [], completedBatches: [], importReports: [], approvalReceipts: [] },
     ...overrides
   };
 }
@@ -214,7 +214,8 @@ test("v4 snapshots round trip opaque collections, precision, and provenance with
     import: {
       sessions: [{ nested: ["session"] }],
       completedBatches: [{ nested: ["batch"] }],
-      importReports: [{ nested: ["report"] }]
+      importReports: [{ nested: ["report"] }],
+      approvalReceipts: []
     }
   });
   const expected = structuredClone(input);
@@ -262,7 +263,8 @@ test("v4 state snapshots save and load through the storage contract", async () =
     import: {
       sessions: [{ nested: ["session"] }],
       completedBatches: [{ nested: ["batch"] }],
-      importReports: [{ nested: ["report"] }]
+      importReports: [{ nested: ["report"] }],
+      approvalReceipts: []
     }
   });
   source.restoreSnapshot(snapshot);
@@ -292,7 +294,8 @@ test("v4 missing, null and array provenance loads and survives ordinary updates"
         record.provenance = structuredClone(provenance);
       }
     }
-    let raw = JSON.stringify({ version: 4, ...snapshot });
+    const { approvalReceipts, ...legacyImport } = snapshot.import;
+    let raw = JSON.stringify({ version: 4, ...snapshot, import: legacyImport });
     const storage = createCareerStorage({
       getItem: () => raw,
       setItem: (key, value) => { raw = value; }
@@ -436,7 +439,7 @@ test("restores supported legacy snapshots with v4 defaults and canonical day dat
   assert.deepEqual(snapshot.achievementRecords[0].provenance, []);
   assert.deepEqual(snapshot.educationRecords, []);
   assert.deepEqual(snapshot.certificationRecords, []);
-  assert.deepEqual(snapshot.import, { sessions: [], completedBatches: [], importReports: [] });
+  assert.deepEqual(snapshot.import, { sessions: [], completedBatches: [], importReports: [], approvalReceipts: [] });
   assert.equal(legacy.employmentRecords[0].startDate, "2020-01-01");
 });
 

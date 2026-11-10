@@ -160,3 +160,155 @@ test("persistence outcomes and reload preserve pending session data", async () =
   assert.equal(persistence.state.getImportSession("session").status, "processing");
   assert.equal(createCareerPersistence(storage).state.getImportSession("session").status, "processing");
 });
+
+function receiptPersistence() {
+  let raw = null;
+  let fail = false;
+  const storage = {
+    getItem: () => raw,
+    setItem(key, value) { if (fail) throw new Error("write failed"); raw = value; }
+  };
+  const options = { locks: { request: (name, settings, callback) => callback() }, secureContext: true };
+  return {
+    storage, options,
+    persistence: createCareerPersistence(storage, options),
+    bytes: () => raw,
+    failWrites: (value) => { fail = value; }
+  };
+}
+
+async function prepareReview(state) {
+  await state.createImportSession(session());
+  await state.addImportCandidates("session", [candidate()], start);
+  await state.transitionImportSession("session", "ready_for_review", start);
+  await state.transitionImportSession("session", "review_in_progress", start);
+}
+
+test("decision writes a minimal receipt atomically and persists it across reload", async () => {
+  const { persistence, storage, options } = receiptPersistence();
+  await prepareReview(persistence.state);
+  const before = persistence.getRevisions();
+  const decision = { candidateId: "candidate", action: "add" };
+  await persistence.state.decideImportCandidate("session", decision, later);
+  const snapshot = persistence.state.getSnapshot();
+  const reviewedCandidate = snapshot.import.sessions[0].candidates[0];
+  assert.deepEqual(snapshot.import.approvalReceipts, [{
+    sessionId: "session", candidateId: "candidate",
+    reviewed: {
+      category: reviewedCandidate.category, reviewedData: reviewedCandidate.reviewedData,
+      validation: reviewedCandidate.validation, fieldProvenance: reviewedCandidate.fieldProvenance
+    },
+    decision, acknowledgedWarnings: false, careerRevision: before.careerRevision,
+    approvedAt: later, expiresAt: expiry, target: null
+  }]);
+  assert.deepEqual(persistence.getRevisions(), {
+    snapshotRevision: before.snapshotRevision + 1, careerRevision: before.careerRevision
+  });
+  assert.deepEqual(createCareerPersistence(storage, options).state.getSnapshot(), snapshot);
+});
+
+test("merge receipt captures the target and replacement, edit, revalidation and skip invalidate it", async () => {
+  const { persistence } = receiptPersistence();
+  const state = persistence.state;
+  await state.addEmploymentRecord({
+    employer: "Employer", roleTitle: "Role", startDate: "2020-01-01",
+    endDate: null, isCurrent: true, responsibilities: []
+  }, { id: "employment", createdAt: start });
+  await prepareReview(state);
+  await state.decideImportCandidate("session", { candidateId: "candidate", action: "add" }, start);
+  const decision = { candidateId: "candidate", action: "merge",
+    targetRecordId: "employment", fieldChoices: { roleTitle: "reviewed" } };
+  await state.decideImportCandidate("session", decision, later);
+  let receipts = state.getSnapshot().import.approvalReceipts;
+  assert.equal(receipts.length, 1);
+  assert.deepEqual(receipts[0].target, {
+    category: "employment", id: "employment", record: state.getEmploymentRecords()[0]
+  });
+  assert.deepEqual(receipts[0].decision, decision);
+  assert.equal(receipts[0].careerRevision, 1);
+  await state.updateImportCandidate("session", "candidate", { roleTitle: "Manager" }, warning, later);
+  assert.deepEqual(state.getSnapshot().import.approvalReceipts, []);
+  await assert.rejects(state.decideImportCandidate("session", decision, later), /acknowledged/);
+  await state.decideImportCandidate("session", decision, later, { acknowledgeWarnings: true });
+  receipts = state.getSnapshot().import.approvalReceipts;
+  assert.equal(receipts[0].acknowledgedWarnings, true);
+  assert.equal(receipts[0].reviewed.fieldProvenance.roleTitle[0].associationStatus, "needs_review");
+  await state.updateImportCandidate("session", "candidate", { roleTitle: "Manager" }, warning, later);
+  assert.deepEqual(state.getSnapshot().import.approvalReceipts, []);
+  await state.decideImportCandidate("session", decision, later, { acknowledgeWarnings: true });
+  await state.decideImportCandidate("session", { candidateId: "candidate", action: "skip" }, later);
+  assert.deepEqual(state.getSnapshot().import.approvalReceipts, []);
+});
+
+test("invalid target and failed receipt writes leave decisions, state, revisions and bytes unchanged", async () => {
+  const context = receiptPersistence();
+  const { persistence } = context;
+  await prepareReview(persistence.state);
+  const before = persistence.state.getSnapshot();
+  const revisions = persistence.getRevisions();
+  const bytes = context.bytes();
+  await assert.rejects(persistence.state.decideImportCandidate("session", {
+    candidateId: "candidate", action: "merge", targetRecordId: "missing", fieldChoices: {}
+  }, later), /target/);
+  await assert.rejects(persistence.state.decideImportCandidate("session", {
+    candidateId: "candidate", action: "add"
+  }, later, { acknowledgeWarnings: null }), /receipt/);
+  assert.deepEqual(persistence.state.getSnapshot(), before);
+  assert.deepEqual(persistence.getRevisions(), revisions);
+  assert.equal(context.bytes(), bytes);
+  context.failWrites(true);
+  await assert.rejects(persistence.state.decideImportCandidate("session", {
+    candidateId: "candidate", action: "add"
+  }, later), (error) => error.status === "save-failed");
+  assert.deepEqual(persistence.state.getSnapshot(), before);
+  assert.deepEqual(persistence.getRevisions(), revisions);
+  assert.equal(context.bytes(), bytes);
+});
+
+test("legacy approvals stay receiptless on reload until a fresh decision", async () => {
+  const source = createCareerState();
+  reviewing(source);
+  source.decideImportCandidate("session", { candidateId: "candidate", action: "add" }, start);
+  const context = receiptPersistence();
+  await context.persistence.state.restoreSnapshot(source.getSnapshot());
+  const reloaded = createCareerPersistence(context.storage, context.options);
+  assert.equal(reloaded.state.getImportSession("session").reviewDecisions.length, 1);
+  assert.deepEqual(reloaded.state.getSnapshot().import.approvalReceipts, []);
+  await reloaded.state.decideImportCandidate("session", { candidateId: "candidate", action: "add" }, later);
+  assert.equal(reloaded.state.getSnapshot().import.approvalReceipts.length, 1);
+});
+
+test("skill merge captures the profile and expiry rejects a fresh approval", async () => {
+  const { persistence } = receiptPersistence();
+  const state = persistence.state;
+  await state.createProfile({ fullName: "Name", headline: "", summary: "", skills: [] },
+    { id: "profile", createdAt: start });
+  const skill = { ...candidate(), category: "skill", originalData: { value: "JS" },
+    reviewedData: { value: "JS" }, fieldProvenance: {} };
+  await state.createImportSession(session());
+  await state.addImportCandidates("session", [skill], start);
+  await state.transitionImportSession("session", "ready_for_review", start);
+  await state.transitionImportSession("session", "review_in_progress", start);
+  const decision = { candidateId: "candidate", action: "merge", targetRecordId: "profile",
+    fieldChoices: { skills: "reviewed" } };
+  await state.decideImportCandidate("session", decision, later);
+  const receipt = state.getSnapshot().import.approvalReceipts[0];
+  assert.deepEqual(receipt.target, { category: "profile", id: "profile", record: state.getProfile() });
+  const before = state.getSnapshot();
+  await assert.rejects(state.decideImportCandidate("session", decision, expiry), /expired/);
+  assert.deepEqual(state.getSnapshot(), before);
+});
+
+test("stale receipt decision cannot change published state or stored bytes", async () => {
+  const context = receiptPersistence();
+  await prepareReview(context.persistence.state);
+  const stale = createCareerPersistence(context.storage, context.options);
+  const before = stale.state.getSnapshot();
+  await context.persistence.state.setImportCategory("session", "employment", later);
+  const bytes = context.bytes();
+  await assert.rejects(stale.state.decideImportCandidate("session", {
+    candidateId: "candidate", action: "add"
+  }, later), (error) => error.status === "stale");
+  assert.deepEqual(stale.state.getSnapshot(), before);
+  assert.equal(context.bytes(), bytes);
+});

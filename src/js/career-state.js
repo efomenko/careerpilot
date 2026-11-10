@@ -14,6 +14,7 @@ import { validateAchievementMappingRecord } from "./achievement-mapping-model.js
 import { calculateJobFitAssessment as calculateFitAssessment } from "./fit-assessment-helpers.js";
 import { createImportSession, createImportCandidate, validateImportSession } from "./import-model.js";
 import { isUtcTimestamp } from "./model-validation.js";
+import { validateApprovalReceipt } from "./approval-receipt.js";
 
 function copyProfile(profile) {
   return profile ? copyNestedData(profile) : null;
@@ -226,7 +227,7 @@ function prepareSnapshotCopy(snapshot) {
     }
     if (!descriptor && !requiredFields.includes(field)) {
       normalizedSnapshot[field] = field === "import"
-        ? { sessions: [], completedBatches: [], importReports: [] }
+        ? { sessions: [], completedBatches: [], importReports: [], approvalReceipts: [] }
         : [];
       continue;
     }
@@ -239,7 +240,11 @@ function prepareSnapshotCopy(snapshot) {
     normalizedSnapshot[field] = descriptor.value;
   }
 
-  return { snapshot: copySnapshotValue(normalizedSnapshot), isV4 };
+  const copy = copySnapshotValue(normalizedSnapshot);
+  if (isPlainObject(copy.import) && !Object.hasOwn(copy.import, "approvalReceipts")) {
+    copy.import.approvalReceipts = [];
+  }
+  return { snapshot: copy, isV4 };
 }
 
 function validateSnapshotRecords(snapshot, isV4) {
@@ -458,7 +463,7 @@ function validateSnapshotRecords(snapshot, isV4) {
     }
   }
 
-  const importFields = ["sessions", "completedBatches", "importReports"];
+  const importFields = ["sessions", "completedBatches", "importReports", "approvalReceipts"];
   if (!isPlainObject(snapshot.import)) {
     errors.push({ field: "import", message: "Must be a plain object." });
   } else {
@@ -470,6 +475,18 @@ function validateSnapshotRecords(snapshot, isV4) {
     for (const field of importFields) {
       if (!Object.hasOwn(snapshot.import, field) || !Array.isArray(snapshot.import[field])) {
         errors.push({ field: `import.${field}`, message: "Must be an array." });
+      }
+      if (Array.isArray(snapshot.import.approvalReceipts)) {
+        const ids = new Set();
+        for (const receipt of snapshot.import.approvalReceipts) {
+          if (!validateApprovalReceipt(receipt)) {
+            errors.push({ field: "import.approvalReceipts", message: "Invalid approval receipt." });
+            continue;
+          }
+          const key = JSON.stringify([receipt.sessionId, receipt.candidateId]);
+          if (ids.has(key)) errors.push({ field: "import.approvalReceipts", message: "Duplicate approval receipt." });
+          ids.add(key);
+        }
       }
     }
   }
@@ -566,7 +583,7 @@ const achievementContentFields = [
   "employmentId"
 ];
 
-function hasAchievementContentChanged(existingRecord, updatedRecord) {
+export function hasAchievementContentChanged(existingRecord, updatedRecord) {
   return achievementContentFields.some((field) =>
     !areValuesEqual(existingRecord[field], updatedRecord[field])
   );
@@ -680,7 +697,7 @@ export function createCareerState({ onMutation, onMutationError } = {}) {
   let achievementMappings = [];
   let educationRecords = [];
   let certificationRecords = [];
-  let importData = { sessions: [], completedBatches: [], importReports: [] };
+  let importData = { sessions: [], completedBatches: [], importReports: [], approvalReceipts: [] };
   let isFresh = true;
 
   function reportMutationError(error) {

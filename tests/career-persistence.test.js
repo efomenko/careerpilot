@@ -119,7 +119,7 @@ function migratedV4(data) {
     achievementRecords: data.achievementRecords.map((record) => ({ ...record, provenance: [] })),
     educationRecords: [],
     certificationRecords: [],
-    import: { sessions: [], completedBatches: [], importReports: [] }
+    import: { sessions: [], completedBatches: [], importReports: [], approvalReceipts: [] }
   };
 }
 
@@ -173,6 +173,10 @@ function stored(value = snapshot(), version = 3) {
   if (version === 2) {
     const { legacyRequirements, ...v2Snapshot } = value;
     return JSON.stringify({ version, ...v2Snapshot });
+  }
+  if ((version === 4 || version === 5) && value.import) {
+    const { approvalReceipts, ...legacyImport } = value.import;
+    return JSON.stringify({ version, ...value, import: legacyImport });
   }
   return JSON.stringify({ version, ...value });
 }
@@ -587,7 +591,7 @@ test("successful mutations save the complete post-mutation snapshot", async () =
 
   const saved = JSON.parse(fake.values.get(storageKey));
   assert.equal(result.id, "profile-saved");
-  assert.equal(saved.version, 5);
+  assert.equal(saved.version, 6);
   assert.deepEqual(Object.keys(saved), ["version", "snapshotRevision", "careerRevision", ...snapshotKeys]);
   assert.equal(saved.snapshotRevision, 1);
   assert.equal(saved.careerRevision, 1);
@@ -600,7 +604,7 @@ test("successful mutations save the complete post-mutation snapshot", async () =
   assert.deepEqual(saved.achievementMappings, []);
   assert.deepEqual(saved.educationRecords, []);
   assert.deepEqual(saved.certificationRecords, []);
-  assert.deepEqual(saved.import, { sessions: [], completedBatches: [], importReports: [] });
+  assert.deepEqual(saved.import, { sessions: [], completedBatches: [], importReports: [], approvalReceipts: [] });
 });
 
 test("restores a complete v3 snapshot without writing", () => {
@@ -674,7 +678,7 @@ test("v1 data stays intact until a successful mutation saves complete v5", async
   fake.setError = null;
   await persistence.state.createJob(job("job-2"));
   const saved = JSON.parse(fake.values.get(storageKey));
-  assert.equal(saved.version, 5);
+  assert.equal(saved.version, 6);
   assert.deepEqual(Object.keys(saved), ["version", "snapshotRevision", "careerRevision", ...snapshotKeys]);
   assert.equal(saved.snapshotRevision, 1);
   assert.equal(saved.careerRevision, 0);
@@ -785,7 +789,7 @@ test("v2 migration preserves legacy entries through restore and later v5 persist
     updatedAt: "2025-04-21T10:00:00.000Z"
   });
   const saved = JSON.parse(fake.values.get(storageKey));
-  assert.equal(saved.version, 5);
+  assert.equal(saved.version, 6);
   assert.equal(saved.snapshotRevision, 1);
   assert.equal(saved.careerRevision, 0);
   assert.deepEqual(saved.legacyRequirements, legacyRequirements);
@@ -926,7 +930,7 @@ test("reloads matching source records and recalculates the Fit Assessment", asyn
 
   assert.ok(fake.calls.setItem.length > 0);
   const saved = JSON.parse(fake.values.get(storageKey));
-  assert.equal(saved.version, 5);
+  assert.equal(saved.version, 6);
   assert.equal("fitAssessments" in saved, false);
 
   const writesBeforeReload = fake.calls.setItem.length;
@@ -1589,7 +1593,7 @@ test("a third-level successful save preserves each ancestor's own outcome", asyn
                 const outcome = saveResults[outcomes.length];
                 outcomes.push(outcome);
                 if (outcome !== "saved") return { status: outcome };
-                storage.setItem(storageKey, JSON.stringify({ version: 5, ...revisions, ...snapshot }));
+                storage.setItem(storageKey, JSON.stringify({ version: 6, ...revisions, ...snapshot }));
                 return { status: "saved" };
               }
             }
@@ -1648,7 +1652,7 @@ test("three-level conflicting updates keep separate outcomes and persist the las
                 const outcome = saveResults[outcomes.length];
                 outcomes.push(outcome);
                 if (outcome !== "saved") return { status: outcome };
-                storage.setItem(storageKey, JSON.stringify({ version: 5, ...revisions, ...snapshot }));
+                storage.setItem(storageKey, JSON.stringify({ version: 6, ...revisions, ...snapshot }));
                 return { status: "saved" };
               }
             }
@@ -1706,7 +1710,7 @@ test("a nested retry after a save exception leaves the outer outcome and clears 
                   throwNext = false;
                   throw new Error("unexpected save error");
                 }
-                storage.setItem(storageKey, JSON.stringify({ version: 5, ...revisions, ...snapshot }));
+                storage.setItem(storageKey, JSON.stringify({ version: 6, ...revisions, ...snapshot }));
                 return { status: "saved" };
               }
             }
@@ -2142,7 +2146,9 @@ test("the application mutation wrapper tracks each supported mutation method", a
   const state = createPersistenceMutationState(persistence);
   const emptySnapshot = state.getSnapshot();
   for (const method of methods) {
-    const operation = state[method]("argument");
+    const operation = method === "decideImportCandidate"
+      ? state[method]("argument", { candidateId: "candidate", action: "skip" })
+      : state[method]("argument", "candidate");
     assert.equal((await operation).id, method);
     assert.equal(await persistence.getOperationOutcome(operation), "saved");
   }
@@ -2166,6 +2172,35 @@ test("persistent storage warnings cannot be cleared by a blocked write", async (
   assert.equal(fake.values.get(storageKey), "not JSON");
   assert.deepEqual(fake.calls.setItem, []);
   assert.equal(persistence.state.getProfile(), null);
+});
+
+test("first no-op mutation migrates a v5 snapshot under the coordinator without advancing career revision", async () => {
+  const old = migratedV4(snapshot());
+  const { approvalReceipts, ...oldImport } = old.import;
+  const raw = JSON.stringify({ version: 5, snapshotRevision: 7, careerRevision: 2, ...old, import: oldImport });
+  const fake = createFakeStorage(raw);
+  let locked = false;
+  const persistence = createCareerPersistence(fake, {
+    locks: { request: async (name, options, callback) => {
+      locked = true;
+      try { return await callback(); } finally { locked = false; }
+    } },
+    secureContext: true
+  });
+  const setItem = fake.setItem.bind(fake);
+  fake.setItem = (key, value) => { assert.equal(locked, true); setItem(key, value); };
+  assert.equal(fake.values.get(storageKey), raw);
+  const operation = persistence.state.updateProfile({
+    fullName: old.profile.fullName, headline: old.profile.headline,
+    summary: old.profile.summary, skills: old.profile.skills
+  }, old.profile.updatedAt);
+  await operation;
+  assert.equal(await persistence.getOperationOutcome(operation), "saved");
+  assert.deepEqual(persistence.getRevisions(), { snapshotRevision: 8, careerRevision: 2 });
+  const saved = JSON.parse(fake.values.get(storageKey));
+  assert.equal(saved.version, 6);
+  assert.deepEqual(saved.import.approvalReceipts, []);
+  assert.deepEqual(persistence.state.getSnapshot(), old);
 });
 
 test("snapshot accessor and save exceptions are contained and observable", async () => {

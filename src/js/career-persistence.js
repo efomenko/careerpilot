@@ -1,6 +1,8 @@
 import { createCareerState } from "./career-state.js";
 import { createCareerStorage } from "./career-storage.js";
 import { createSnapshotWriter } from "./snapshot-writer.js";
+import { validateApprovalReceipt } from "./approval-receipt.js";
+import { findCompletedImport, prepareApprovedImport } from "./approved-import.js";
 
 const mutationMethods = new Set([
   "createProfile", "updateProfile", "addEmploymentRecord", "updateEmploymentRecord",
@@ -22,6 +24,43 @@ function copySnapshot(snapshot) {
   const state = createCareerState();
   state.restoreSnapshot(snapshot);
   return state.getSnapshot();
+}
+
+function updateApprovalReceipts(snapshot, method, args, session, careerRevision) {
+  if (method !== "decideImportCandidate" && method !== "updateImportCandidate") return;
+  const sessionId = args[0];
+  const candidateId = method === "decideImportCandidate" ? args[1].candidateId : args[1];
+  snapshot.import.approvalReceipts = snapshot.import.approvalReceipts.filter(
+    (receipt) => receipt.sessionId !== sessionId || receipt.candidateId !== candidateId
+  );
+  if (method !== "decideImportCandidate" || args[1].action === "skip") return;
+
+  const decision = session.reviewDecisions.find((item) => item.candidateId === candidateId);
+  const candidate = session.candidates.find((item) => item.id === candidateId);
+  const { category, reviewedData, validation, fieldProvenance } = candidate;
+  let target = null;
+  if (decision.action === "merge") {
+    const targetCategory = category === "skill" ? "profile" : category;
+    const collections = {
+      employment: snapshot.employmentRecords,
+      achievement: snapshot.achievementRecords,
+      education: snapshot.educationRecords,
+      certification: snapshot.certificationRecords
+    };
+    const matches = targetCategory === "profile"
+      ? [snapshot.profile].filter((record) => record?.id === decision.targetRecordId)
+      : collections[targetCategory].filter((record) => record.id === decision.targetRecordId);
+    if (matches.length !== 1) throw new Error("Merge target is missing or ambiguous.");
+    target = { category: targetCategory, id: decision.targetRecordId, record: matches[0] };
+  }
+  const receipt = {
+    sessionId, candidateId, reviewed: { category, reviewedData, validation, fieldProvenance },
+    decision, acknowledgedWarnings: args[3]?.acknowledgeWarnings === undefined
+      ? false : args[3].acknowledgeWarnings,
+    careerRevision, approvedAt: args[2], expiresAt: session.expiresAt, target
+  };
+  if (!validateApprovalReceipt(receipt)) throw new Error("Approval receipt is invalid.");
+  snapshot.import.approvalReceipts.push(receipt);
 }
 
 export function createPersistenceMutationState(persistence) {
@@ -168,12 +207,15 @@ export function createCareerPersistence(
           staged.restoreSnapshot(snapshot);
           value = staged[method](...args);
         }
+        let next;
         try {
-          return { snapshot: staged.getSnapshot(), result: value };
+          next = staged.getSnapshot();
         } catch (error) {
           stagingSnapshotFailed = true;
           throw error;
         }
+        updateApprovalReceipts(next, method, args, value, writer.getRevisions().careerRevision);
+        return { snapshot: next, result: value };
       });
     } catch (error) {
       if (stagingSnapshotFailed) {
@@ -219,8 +261,34 @@ export function createCareerPersistence(
       return typeof value === "function" ? value.bind(current) : value;
     }
   });
+  async function commitApprovedImport({ sessionId, expectedSnapshotRevision, expectedCareerRevision }, { createId, now }) {
+    if (typeof sessionId !== "string" || !sessionId.trim()
+      || !Number.isSafeInteger(expectedSnapshotRevision) || expectedSnapshotRevision < 0
+      || !Number.isSafeInteger(expectedCareerRevision) || expectedCareerRevision < 0
+      || typeof createId !== "function" || typeof now !== "function") {
+      throw new TypeError("Import requires a session ID, revisions, ID generator and clock.");
+    }
+    if (status.persistentWarning) return { sessionId, status: "failed", reason: "writes-disabled" };
+    try {
+      const result = await writer.write(expectedSnapshotRevision, (snapshot) =>
+        prepareApprovedImport(snapshot, {
+          sessionId, expectedCareerRevision, careerRevision: writer.getRevisions().careerRevision, now, createId
+        }), { findCompleted: (snapshot) => findCompletedImport(snapshot, sessionId) });
+      if (result.status === "saved" || result.status === "unchanged") return result.result;
+      if (result.error) reportUnexpected(result.error);
+      return { sessionId, status: "failed", reason: result.status, ...(result.cause ? { cause: result.cause } : {}),
+        ...(result.status === "stale" ? { expectedSnapshotRevision, actualSnapshotRevision: result.snapshotRevision } : {}) };
+    } catch (error) {
+      if (!error.code) {
+        reportUnexpected(error);
+        return { sessionId, status: "failed", reason: "invalid-data" };
+      }
+      return { sessionId, status: "failed", reason: error.code, ...error.details };
+    }
+  }
   return {
     state: publicState,
+    commitApprovedImport,
     getRevisions: () => writer.getRevisions(),
     getOperationOutcome(operation) {
       return operationOutcomes.get(operation) ?? Promise.resolve("invalid-operation");

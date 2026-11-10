@@ -1060,9 +1060,9 @@ violate these validation rules; future and unusual-date warnings are deferred
 until their policy is approved. For Certification, definite
 expiration-before-issue is invalid. Never invent missing date precision.
 
-### 16.6 Snapshot v4 and historical migration
+### 16.6 Snapshot history and migration
 
-Version 4 is the current storage schema. The v4 envelope retains all v3
+Version 4 retained all v3
 fields and adds `educationRecords`, `certificationRecords`, and these
 explicitly approved collections:
 
@@ -1108,23 +1108,54 @@ never silently discard data or repair malformed records.
 Each migration stage validates its input and output against that stage's
 contract. Any malformed or unsupported snapshot is preserved unchanged and
 not partially restored or overwritten. Migration and loading remain
-read-only; a later successful save writes the full v4 envelope. Historical
+read-only; a later successful coordinated save writes the full current envelope. Historical
 negative zero in supported legacy Requirements remains readable but
 write-protected; unsafe integer tokens and unrepresentable historical dates
 are protected without overwriting the original value.
 
+Version 6 is the current schema. Version 5 introduced `snapshotRevision` and
+`careerRevision`; v6 adds `import.approvalReceipts` without changing those
+counters or the three existing opaque import collections. The v5 envelope is
+validated as v5 before migration; valid v1-v4 data first migrates to v4.
+All v1-v5 snapshots acquire an empty receipt array in memory. Loading never
+writes, and old approvals do not acquire receipts or become newly approved.
+The first coordinated write of an older snapshot, including a no-op, writes
+the complete v6 envelope and advances `snapshotRevision` once. The existing
+career revision remains unchanged unless the operation changes career data.
+Failed or uncoordinated migration writes leave storage and active state intact.
+
+The v6 receipt is a strict JSON object with `sessionId`, `candidateId`,
+`reviewed`, `decision`, `acknowledgedWarnings`, `careerRevision`, `approvedAt`,
+`expiresAt`, and `target`. `reviewed` contains exactly `category`, `reviewedData`,
+`validation`, and `fieldProvenance`; it excludes `originalData` and
+`possibleDuplicates`. `decision` is the exact matching add or merge decision.
+`target` is null for add, or `{ category, id, record }` for
+merge, with a matching target ID and category (skills target a Profile); the
+target state must satisfy its destination model validator.
+Warning candidates require acknowledgement, times must be UTC and approval
+must precede expiry, and one receipt per session/candidate is allowed.
+An add or merge decision creates or replaces the receipt in the same
+coordinated write. It captures the current career revision, reviewed fields,
+exact decision, acknowledgement, decision time, session expiry, and current
+merge target. A missing or invalid target fails the decision without saving.
+Skipping, editing, or revalidating the candidate removes its receipt.
+Legacy decisions remain receiptless until a fresh decision is recorded.
+The import transaction checks existing receipts against current session data,
+career revision, target and expiry. Expired-session cleanup remains future work.
+Historical completed batches and reports remain opaque on v5 migration.
+
 ### 16.7 Atomic import transaction, revisions, and idempotency
 
-CV-018's approved target uses two persisted, non-negative safe-integer
-counters in the version-5 envelope: `snapshotRevision` and `careerRevision`.
+CV-018 uses two persisted, non-negative safe-integer counters, introduced
+in the version-5 envelope and retained in v6: `snapshotRevision` and `careerRevision`.
 Migration from versions 1 through 4 initializes both to zero without dropping
 existing data. Each successful snapshot write advances `snapshotRevision`
-once; a no-op does not write or advance it. `careerRevision` advances once
+once; a no-op does not write or advance it unless migration is required. `careerRevision` advances once
 only when committed Profile, Employment, Achievement, Education, or
 Certification records change. Import-session, approval-receipt, report,
 Job, Requirement, and mapping changes do not by themselves advance
 `careerRevision`; a mutation that also changes a career record does.
-Approvals will bind to `careerRevision`, while stale-writer checks use
+Approvals bind to `careerRevision`, while stale-writer checks use
 `snapshotRevision`. A migration-only write advances `snapshotRevision` but
 not `careerRevision`. Counter overflow must fail closed.
 
@@ -1148,74 +1179,54 @@ the operation before closing dialogs, rerendering, navigating, or announcing
 success. While a mutation is pending, user interactions that could change or
 resubmit the operation are blocked; failures retain the dialog and its inputs.
 
-The proposed, not-yet-implemented transaction sequence is `prepare ->
-validate -> persist -> publish`. Its atomic import guarantee depends on
-all same-origin application writers participating in the shared lock. If
-safe writer coordination cannot be established, the import commit must fail
-closed.
-
-The conceptual API is:
+The atomic import API on the persistence instance is:
 
 ```js
-commitApprovedImport({
-  importSessionId,
-  expectedCareerRevision,
-  expectedSessionRevision,
-  idempotencyKey,
-  payloadIdentity,
-  approvedChanges,
-  report
-})
+commitApprovedImport(
+  { sessionId, expectedSnapshotRevision, expectedCareerRevision },
+  { createId, now }
+)
 ```
 
-The import path must not call existing sequential CRUD APIs to apply the
-batch. It prepares a detached complete next snapshot, applies approved adds
-and explicitly selected merge fields there, resolves valid relationships,
-and validates every record and relationship in the complete candidate
-snapshot. It checks career/session revisions, duplicate and changed merge
-targets, candidate approval/validation status, prior candidate import, and
-idempotency before writing.
+The transaction checks the stored snapshot and both revisions under the lock,
+verifies each approved receipt, and maps all approved candidates on a detached
+snapshot. It applies the Profile before skills, preserves unnormalized skill
+values and stable `skills` provenance paths, and resolves explicit Achievement
+Employment references. Generated IDs are checked for collisions and the
+injected clock supplies one commit timestamp. The complete snapshot is
+validated and written once; only then is it published. Failure returns a
+failure report without changing stored bytes or published state.
 
-After validation, serialize and persist the entire snapshot with one
-`localStorage.setItem()` call. Only after that succeeds publish the prepared
-state in memory. Preparation or persistence failure leaves the prior
-in-memory state authoritative and leaves the prior stored value intact.
-Publication should be a prepared, synchronous state replacement whose
-failure is prevented by design; a browser storage write cannot be rolled
-back if a later publish step throws.
+All candidates must have a review decision before the session can complete.
+For non-skill merges to the same target, explicit choices for the same field
+must select equal values (an `existing` choice selects the value captured at
+approval); differing selections reject the entire transaction. Disjoint or
+equal choices can coexist. Skill appends retain their ordered, non-deduplicating
+semantics; a skill `existing` choice is checked against its own approved target,
+not against skills staged earlier in the batch, and the exact skill must also
+remain in the final staged Profile. Achievement merges use the
+ordinary content-change rule to reset a changed verified record to unverified.
 
-The same idempotency key and same payload identity returns the original
-result; the same key with a different payload is rejected. Already-imported
-candidates cannot be imported again. The same snapshot stores the completion
-marker and report as the approved career changes. Reports include batch,
-session, key, completion, candidate IDs, counts, record IDs, and
-non-sensitive warnings; they exclude original CV content and unapproved
-excerpts. Exact canonical payload serialization/hash and marker retention
-remain open.
+Idempotency is keyed by session ID. A retry returns the prior completed report
+under the lock, including from a stale tab, without publishing or writing.
+The same snapshot stores a version-tagged completion marker and a minimal report
+with session, completion time, imported or merged candidate and record IDs,
+and skipped candidate IDs. Successful imports remove the imported candidates'
+approval receipts. Reports contain no CV content or excerpts.
 
 Stale revisions or changed/deleted merge targets block commit and require
 renewed review. Revision checks require the revision source and enforced
 writer constraint above; a check followed by `setItem()` alone is not
 cross-tab atomic.
 
-### 16.8 Single-tab concurrency and external changes
+### 16.8 Cross-tab concurrency and external changes
 
-The initial MVP assumes one browser tab modifies data, but the current
-implementation does not enforce that constraint. Its sequential checks
-protect data observed during those checks; independent writers are not
-coordinated, and there is no stale-write detection or atomic multi-writer
-guarantee. The current implementation has no storage-event handling or
-cross-tab lock. A future
-implementation must detect external snapshot changes and block commits based
-on stale data. It must not claim that `localStorage` provides cross-tab
-atomicity: a read/revision check followed by `setItem()` is not compare-and-
-swap, and an asynchronous storage event cannot prevent another tab's write.
-
-The approved CV-018 target uses the shared lock described in Section 16.7.
-Until it is implemented across ordinary state writers, a transaction-only lock
-would not protect against a normal mutation in another tab. The proposed import
-transaction guarantee depends on enforcing the constraint across all writers,
-not on revision checks alone.
+Participating same-origin writers use the shared lock described in Section
+16.7. A stale tab cannot commit new changes until it reloads. A successful
+import retry can return the stored report without publishing the other tab's
+snapshot; subsequent mutations from that stale tab still require a reload.
+The lock cannot coordinate code that bypasses it. `localStorage` alone does not
+provide compare-and-swap, and storage events cannot prevent competing writes.
 
 ### 16.9 Backend files, expiry, failure, and recovery
 
@@ -1231,12 +1242,9 @@ provenance, and pending decisions. Keep approved career records and their
 provenance. Completed sessions retain only the minimal report. Any cleanup
 must preserve this boundary and must not delete approved career data.
 
-For import, validation or preparation failure occurs before persistence and
-does not publish state. A failed `setItem()` leaves the previous persisted
-snapshot and live state authoritative for the import. The existing ordinary
-mutation behavior is different: ordinary mutations currently remain visible
-in memory after save failure and report a persistence warning. Do not
-silently describe that existing behavior as transactional.
+For import and ordinary coordinated mutations, validation or preparation
+failure occurs before persistence and does not publish state. A failed
+`setItem()` leaves the previous persisted snapshot and live state authoritative.
 
 ### 16.10 Compatibility with M4 Drafts and Review
 

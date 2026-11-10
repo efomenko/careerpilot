@@ -49,12 +49,15 @@ export function createSnapshotWriter({
     getRevisions() {
       return { snapshotRevision: publishedSnapshotRevision, careerRevision: publishedCareerRevision };
     },
-    async write(expectedRevision, prepare) {
+    async write(expectedRevision, prepare, { findCompleted } = {}) {
       if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
         throw new TypeError("Expected revision must be a non-negative safe integer.");
       }
       if (typeof prepare !== "function") {
         throw new TypeError("A preparation function is required.");
+      }
+      if (findCompleted !== undefined && typeof findCompleted !== "function") {
+        throw new TypeError("Completed-result lookup must be a function.");
       }
       if (secureContext !== true || !locks || typeof locks.request !== "function") {
         return { status: "coordination-unavailable" };
@@ -76,6 +79,10 @@ export function createSnapshotWriter({
           ) || current.careerRevision > current.snapshotRevision) {
             return { status: "read-failed", cause: "invalid-revision" };
           }
+          if (findCompleted) {
+            const result = findCompleted(copySnapshot(current.snapshot));
+            if (result !== null) return { status: "unchanged", result };
+          }
           if (current.snapshotRevision !== expectedRevision || publishedSnapshotRevision !== expectedRevision
             || current.careerRevision !== publishedCareerRevision) {
             return { status: "stale", snapshotRevision: current.snapshotRevision };
@@ -93,7 +100,7 @@ export function createSnapshotWriter({
           }
           const nextSnapshot = copySnapshot(prepared.snapshot);
           const careerChanged = !equalJson(careerData(current.snapshot), careerData(nextSnapshot));
-          if (equalJson(current.snapshot, nextSnapshot) && !prepared.forceWrite) {
+          if (equalJson(current.snapshot, nextSnapshot) && !prepared.forceWrite && !current.needsMigration) {
             return { status: "unchanged", result: prepared.result };
           }
           if (current.snapshotRevision === Number.MAX_SAFE_INTEGER
